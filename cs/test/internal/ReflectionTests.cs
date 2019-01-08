@@ -4,31 +4,120 @@
     using System.Collections.Generic;
     using System.Linq;
     using Bond;
-    using Microsoft.VisualStudio.TestTools.UnitTesting;
+    using Bond.Internal.Reflection;
+    using Bond.IO.Safe;
+    using Bond.Protocols;
     using Bond.Tag;
+    using NUnit.Framework;
 
-    [TestClass]
+    [TestFixture]
     public class ReflectionTests
     {
-        [TestMethod]
+        [Test]
         public void Reflection_Interface_Base()
         {
             Assert.AreEqual(typeof(IBase), typeof(ISub).GetBaseSchemaType());
         }
 
-        [TestMethod]
+        [Test]
         public void Reflection_Interface_Chain_Base()
         {
             Assert.AreEqual(typeof(ISub), typeof(ISubSub).GetBaseSchemaType());
         }
 
-        [TestMethod]
-        public void GenericSchemaType()
+        [Test]
+        public void Reflection_GenericSchemaType()
         {
             GenericSchemaStructTest<int>();
             GenericSchemaStructTest<float>();
             GenericSchemaClassTest<BasicTypes>();
             GenericSchemaClassTest<List<string>>();
+        }
+
+        [Test]
+        public void Reflection_FindMethodFromObject()
+        {
+            Assert.AreEqual("ReadStructBegin", ReflectionExtensions.FindMethod(typeof(ReaderA), "ReadStructBegin", new Type[0]).Name);
+            Assert.AreEqual(typeof(ReaderA), ReflectionExtensions.FindMethod(typeof(ReaderA), "ReadStructBegin", new Type[0]).DeclaringType);
+        }
+
+        [Test]
+        public void Reflection_FindMethodFromInterface()
+        {
+            Assert.AreEqual("ReadStructBegin", ReflectionExtensions.FindMethod(typeof(IReaderA), "ReadStructBegin", new Type[0]).Name);
+            Assert.AreEqual(typeof(IReaderA), ReflectionExtensions.FindMethod(typeof(IReaderA), "ReadStructBegin", new Type[0]).DeclaringType);
+        }
+
+        [Test]
+        public void Reflection_MultipleMethodsImplementedException()
+        {
+            Assert.That(() => ReflectionExtensions.FindMethod(typeof(IReaderAB), "ReadStructBegin", new Type[0]),
+                Throws.TypeOf<System.Reflection.AmbiguousMatchException>()
+                     .With.Message.Contains("FindMethod found more than one matching method"));
+        }
+
+        // We test on the SchemaFields instead of the RuntimeSchema, because, for now, the list sub
+        // type is not part of Bond.TypeDef
+        [Test]
+        public void Reflection_DifferentiateBetweenListAndNullable()
+        {
+            var schemaFields = typeof(ListVsNullable).GetSchemaFields();
+
+            foreach (var field in schemaFields)
+            {
+                ListSubType fieldListSubType = field.GetSchemaType().GetBondListDataType();
+
+                switch (field.Name)
+                {
+                    case "nullableInt":
+                        Assert.AreEqual(ListSubType.NULLABLE_SUBTYPE, fieldListSubType);
+                        break;
+
+                    case "vectorInt":
+                        Assert.AreEqual(ListSubType.NO_SUBTYPE, fieldListSubType);
+                        break;
+
+                    case "listInt":
+                        Assert.AreEqual(ListSubType.NO_SUBTYPE, fieldListSubType);
+                        break;
+
+                    case "blobData":
+                        Assert.AreEqual(ListSubType.BLOB_SUBTYPE, fieldListSubType);
+                        break;
+
+                    default:
+                        Assert.Fail("Unexpected field '{0}'", field.Name);
+                        break;
+                }
+            }
+        }
+
+        [Test]
+        public void Reflection_IsBonded()
+        {
+            Assert.IsTrue(Reflection.IsBonded(typeof(Bonded<>)));
+            Assert.IsTrue(Reflection.IsBonded(typeof(Bonded<BasicTypes>)));
+            Assert.IsTrue(Reflection.IsBonded(typeof(BondedVoid<>)));
+            Assert.IsTrue(Reflection.IsBonded(typeof(BondedVoid<CompactBinaryReader<InputBuffer>>)));
+            Assert.IsTrue(Reflection.IsBonded(typeof(CustomBonded<>)));
+            Assert.IsTrue(Reflection.IsBonded(typeof(CustomBonded<BasicTypes>)));
+
+            Assert.IsFalse(Reflection.IsBonded(typeof(int)));
+            Assert.IsFalse(Reflection.IsBonded(typeof(BasicTypes)));
+        }
+
+        // We test on the SchemaFields instead of the RuntimeSchema, because, for now, the list sub
+        // type is not part of Bond.TypeDef
+        [Test]
+        public void Reflection_EnsureUnknownSeqIDLType()
+        {
+            var schemaFields = typeof(BasicTypes).GetSchemaFields();
+
+            foreach (var field in schemaFields)
+            {
+                ListSubType fieldListSubType = field.GetSchemaType().GetBondListDataType();
+                Assert.AreEqual(ListSubType.NO_SUBTYPE, fieldListSubType, "Failed on field '{0}'", field.Name);
+            }
         }
 
         static Type GetFieldSchemaTypeClass<T>(string name)
@@ -121,5 +210,53 @@
         interface ISubSub : IBase, ISub
         {
         }
+
+        interface IReaderA
+        {
+            void ReadStructBegin();
+        }
+
+        interface IReaderB
+        {
+            void ReadStructBegin();
+        }
+
+        interface IReaderAB : IReaderA, IReaderB
+        {
+        }
+
+        class ReaderA : IReaderA
+        {
+            public void ReadStructBegin()
+            {
+                throw new NotImplementedException();
+            }
+        }
+
+        class CustomBonded<T> : IBonded
+        {
+            readonly IBonded<T> _instance;
+
+            public CustomBonded(IBonded<T> instance)
+            {
+                _instance = instance;
+            }
+
+            public void Serialize<W>(W writer)
+            {
+                _instance.Serialize<W>(writer);
+            }
+
+            public U Deserialize<U>()
+            {
+                return _instance.Deserialize<U>();
+            }
+
+            public IBonded<U> Convert<U>()
+            {
+                return _instance.Convert<U>();
+            }
+        }
+
     }
 }

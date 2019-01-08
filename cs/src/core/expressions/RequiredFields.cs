@@ -7,6 +7,7 @@ namespace Bond.Expressions
     using System.Linq;
     using System.Linq.Expressions;
     using System.Reflection;
+    using Bond.Internal.Reflection;
 
     internal static class RequiredFields
     {

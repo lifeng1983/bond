@@ -3,16 +3,74 @@
 
 #pragma once
 
+#include <bond/core/config.h>
+
 #include "encoding.h"
-#include <bond/core/traits.h>
+
 #include <bond/core/bond_version.h>
+#include <bond/core/traits.h>
+
 #include <boost/call_traits.hpp>
 #include <boost/noncopyable.hpp>
 
-#pragma warning(push)
-// Disable warning when Buffer parameter is a reference
-// warning C4512: 'bond::SimpleBinaryReader<Buffer>' : assignment operator could not be generated
-#pragma warning(disable:4512) 
+/*
+                     .-------------.----------------.
+   struct            | base fields | derived fields |
+                     '-------------'----------------'
+
+                     .----------.----------.   .----------.
+   fields            |  field   |  field   |...|  field   |
+                     '----------'----------'   '----------'
+
+                     .----------.
+   field             |  value   |
+                     '----------'
+
+                                           .---.---.---.---.---.---.---.---.
+   value            bool                   |   |   |   |   |   |   |   | v |
+                                           '---'---'---'---'---'---'---'---'
+                                                                          0
+
+                    all integral types are written binary, native size, uncompressed, little endian
+
+                    float, double          little endian
+
+
+                                            .-------.------------.
+                     string, wstring        | count | characters |
+                                            '-------'------------'
+
+                           count            uint32 count of 1-byte (for string)
+                                            or 2-byte (for wstring) Unicode code
+                                            units (variable encoded in v2)
+
+                           characters       1-byte UTF-8 code units (for string) or 2-byte
+                                            UTF-16LE code units (for wstring)
+
+
+                                           .-------. .-------.
+                    blob, list, set,       | count | | items |...
+                    vector, nullable       '-------' '-------'
+
+                           count            uint32 count of items (variable encoded in v2)
+
+                           items            each item encoded according to its type
+
+                                           .-------. .-----.--------.
+                    map                    | count | | key | mapped |...
+                                           '-------' '-----'--------'
+
+                            count           uint32 count of {key,mapped} pairs (variable encoded in v2)
+
+                            key, mapped     each item encoded according to its type
+
+                                           .-------. .-----------.
+                    bonded                 | count | | marshaled |
+                                           '-------' '-----------'
+                            count           uint32 count of bytes (always fixed-width, even in v2)
+
+                            marshaled       a marshaled payload
+*/
 
 namespace bond
 {
@@ -23,7 +81,7 @@ class SimpleBinaryWriter;
 
 
 /// @brief Reader for Simple Binary protocol
-template <typename BufferT>
+template <typename BufferT, typename MarshaledBondedProtocolsT>
 class SimpleBinaryReader
 {
 public:
@@ -31,25 +89,25 @@ public:
     typedef StaticParser<SimpleBinaryReader&> Parser;
     typedef SimpleBinaryWriter<Buffer>        Writer;
 
-    static const uint16_t magic; // = SIMPLE_PROTOCOL
-    static const uint16_t version = v2;
+    BOND_STATIC_CONSTEXPR uint16_t magic = SIMPLE_PROTOCOL;
+    BOND_STATIC_CONSTEXPR uint16_t version = v2;
 
-    
+
     /// @brief Construct from input buffer/stream containing serialized data.
     SimpleBinaryReader(typename boost::call_traits<Buffer>::param_type input,
-                       uint16_t version = default_version<SimpleBinaryReader>::value)
+                       uint16_t version_value = default_version<SimpleBinaryReader>::value)
         : _input(input),
-          _version(version)
+          _version(version_value)
     {
         BOOST_ASSERT(_version <= SimpleBinaryReader::version);
     }
 
 
-    // This identical to compiler generated ctor except for throw() declaration.
+    // This identical to compiler generated ctor except for noexcept declaration.
     // Copy ctor that is explicitly declared throw() is needed for boost::variant
-    // to use optimized code path. 
+    // to use optimized code path.
     /// @brief Copy constructor
-    SimpleBinaryReader(const SimpleBinaryReader& that) throw()
+    SimpleBinaryReader(const SimpleBinaryReader& that) BOND_NOEXCEPT
         : _input(that._input),
           _version(that._version)
     {}
@@ -62,9 +120,17 @@ public:
     }
 
 
-    /// @brief Access to underlaying buffer
-    typename boost::call_traits<Buffer>::const_reference 
+    /// @brief Access to underlying buffer
+    typename boost::call_traits<Buffer>::const_reference
     GetBuffer() const
+    {
+        return _input;
+    }
+
+
+    /// @brief Access to underlying buffer
+    typename boost::call_traits<Buffer>::reference
+    GetBuffer()
     {
         return _input;
     }
@@ -72,12 +138,12 @@ public:
 
     bool ReadVersion()
     {
-        uint16_t magic;
+        uint16_t magic_value;
 
-        _input.Read(magic);
+        _input.Read(magic_value);
         _input.Read(_version);
 
-        return magic == SimpleBinaryReader::magic 
+        return magic_value == SimpleBinaryReader::magic
             && _version <= SimpleBinaryReader::version;
     }
 
@@ -85,19 +151,19 @@ public:
     // Read for basic types
     template <typename T>
     typename boost::disable_if<is_string_type<T> >::type
-    Read(T& var) 
+    Read(T& var)
     {
         _input.Read(var);
     }
 
-    
+
     // Read for strings
     template <typename T>
     typename boost::enable_if<is_string_type<T> >::type
     Read(T& var)
     {
         uint32_t length = 0;
-        
+
         ReadSize(length);
         detail::ReadStringData(_input, var, length);
     }
@@ -121,7 +187,7 @@ public:
 
     template <typename T>
     void Skip(const bonded<T, SimpleBinaryReader&>& bonded);
-    
+
 
     // Skip for strings
     template <typename T>
@@ -129,12 +195,12 @@ public:
     Skip()
     {
         uint32_t length;
-                
+
         ReadSize(length);
         _input.Skip(length * sizeof(typename detail::string_char_int_type<T>::type));
     }
 
-    
+
     void Skip(BondDataType type)
     {
         switch (type)
@@ -201,9 +267,9 @@ protected:
     }
 
 
-    template <typename Input, typename Output>
-    friend 
-    bool is_protocol_version_same(const SimpleBinaryReader<Input>&, 
+    template <typename Input, typename MarshaledBondedProtocols, typename Output>
+    friend
+    bool is_protocol_version_same(const SimpleBinaryReader<Input, MarshaledBondedProtocols>&,
                                   const SimpleBinaryWriter<Output>&);
 
     Buffer   _input;
@@ -211,10 +277,8 @@ protected:
 };
 
 
-template <typename Buffer>
-const uint16_t SimpleBinaryReader<Buffer>::magic = SIMPLE_PROTOCOL;
-
-#pragma warning(pop)
+template <typename BufferT, typename MarshaledBondedProtocolsT>
+BOND_CONSTEXPR_OR_CONST uint16_t SimpleBinaryReader<BufferT, MarshaledBondedProtocolsT>::magic;
 
 
 /// @brief Writer for Simple Binary protocol
@@ -235,12 +299,19 @@ public:
         BOOST_ASSERT(_version <= Reader::version);
     }
 
+    /// @brief Access to underlying buffer
+    typename boost::call_traits<Buffer>::reference
+    GetBuffer()
+    {
+        return _output;
+    }
+
     void WriteVersion()
     {
         _output.Write(Reader::magic);
         _output.Write(_version);
     }
-    
+
     void WriteStructBegin(const Metadata& /*metadata*/, bool /*base*/)
     {}
 
@@ -256,7 +327,7 @@ public:
     void WriteFieldEnd()
     {}
 
-    
+
     // WriteContainerBegin
     template <typename T>
     void WriteContainerBegin(uint32_t size, T)
@@ -291,7 +362,7 @@ public:
     Write(const T& value)
     {
         uint32_t length = string_length(value);
-        
+
         WriteSize(length);
         detail::WriteStringData(_output, value, length);
     }
@@ -311,9 +382,9 @@ protected:
             WriteVariableUnsigned(_output, size);
     }
 
-    template <typename Input, typename Output>
-    friend 
-    bool is_protocol_version_same(const SimpleBinaryReader<Input>&, 
+    template <typename Input, typename MarshaledBondedProtocols, typename Output>
+    friend
+    bool is_protocol_version_same(const SimpleBinaryReader<Input, MarshaledBondedProtocols>&,
                                   const SimpleBinaryWriter<Output>&);
 
     Buffer&  _output;
@@ -321,22 +392,20 @@ protected:
 };
 
 
-template <typename Input> struct
-protocol_has_multiple_versions<SimpleBinaryReader<Input> >
-    : true_type {};
+template <typename Input, typename MarshaledBondedProtocols> struct
+protocol_has_multiple_versions<SimpleBinaryReader<Input, MarshaledBondedProtocols> >
+    : std::true_type {};
 
 
-template <typename Input, typename Output>
-bool is_protocol_version_same(const SimpleBinaryReader<Input>& reader, 
+template <typename Input, typename MarshaledBondedProtocols, typename Output>
+bool is_protocol_version_same(const SimpleBinaryReader<Input, MarshaledBondedProtocols>& reader,
                               const SimpleBinaryWriter<Output>& writer)
 {
     return reader._version == writer._version;
 }
 
-template <typename Output> struct 
+template <typename Output> struct
 may_omit_fields<SimpleBinaryWriter<Output> >
-    : false_type {};
+    : std::false_type {};
 
-};
-
-
+} // namespace bond

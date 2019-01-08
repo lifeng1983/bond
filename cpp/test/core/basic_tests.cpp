@@ -1,15 +1,6 @@
 #include <bond/core/bond_version.h>
-
-namespace bond
-{
-    // Use Simple Protocol v2 by default
-    template <typename Buffer> struct
-    default_version<SimpleBinaryReader<Buffer> >
-    {
-        static const uint16_t value = 2;
-    };
-};
-
+#include <bond/core/box.h>
+#include <bond/stream/output_counter.h>
 
 #include "precompiled.h"
 #include "basic_tests.h"
@@ -121,12 +112,32 @@ TEST_CASE_BEGIN(MetaTests)
 TEST_CASE_END
 
 
+template <typename Reader, typename Writer>
+TEST_CASE_BEGIN(OutputCounterTests)
+{
+    auto x = InitRandom<unittest::NestedStructBondedView>();
+
+    typename Writer::Buffer buffer;
+    Writer writer(buffer);
+    bond::Serialize(x, writer);
+
+    bond::OutputCounter counter;
+    typename bond::get_protocol_writer<Reader, bond::OutputCounter>::type counter_writer(counter);
+    bond::Serialize(x, counter_writer);
+
+    UT_AssertIsTrue(buffer.GetBuffer().size() == counter.GetCount());
+}
+TEST_CASE_END
+
+
 template <uint16_t N, typename Reader, typename Writer>
 void BasicTests(const char* name)
 {
     UnitTestSuite suite(name);
-    
+
     AddTestCase<TEST_ID(N), MetaTests, Reader, Writer>(suite, "Meta tests");
+
+    AddTestCase<TEST_ID(N), OutputCounterTests, Reader, Writer>(suite, "OutputCounter tests");
 }
 
 
@@ -137,46 +148,46 @@ struct SwapTest
     {
         X x1, x2, y1, y2;
 
-        UT_AssertIsTrue(x1 == x2);
-        UT_AssertIsTrue(y1 == y2);
+        UT_Compare(x1, x2);
+        UT_Compare(y1, y2);
         
         x1 = InitRandom<X>();
         y1 = InitRandom<X>();
 
-        UT_AssertIsTrue(x1 != x2);
-        UT_AssertIsTrue(y1 != y2);
+        UT_NegateCompare(x1, x2);
+        UT_NegateCompare(y1, y2);
         
         x2 = x1;
         y2 = y1;
 
-        UT_AssertIsTrue(x1 == x2);
-        UT_AssertIsTrue(y1 == y2);
+        UT_Compare(x1, x2);
+        UT_Compare(y1, y2);
 
         x2 = InitRandom<X>();
         y2 = InitRandom<X>();
 
         X x3(x1), x4(x2), y3(y1), y4(y2);
 
-        UT_AssertIsTrue(x1 == x3);
-        UT_AssertIsTrue(y1 == y3);
+        UT_Compare(x1, x3);
+        UT_Compare(y1, y3);
 
-        UT_AssertIsTrue(x2 == x4);
-        UT_AssertIsTrue(y2 == y4);
+        UT_Compare(x2, x4);
+        UT_Compare(y2, y4);
 
-        UT_AssertIsTrue(x1 != x4);
-        UT_AssertIsTrue(y1 != y4);
+        UT_NegateCompare(x1, x4);
+        UT_NegateCompare(y1, y4);
 
-        UT_AssertIsTrue(x3 != x2);
-        UT_AssertIsTrue(y3 != y2);
+        UT_NegateCompare(x3, x2);
+        UT_NegateCompare(y3, y2);
 
         swap(x1, x2);
         y1.swap(y2);
 
-        UT_AssertIsTrue(x1 == x4);
-        UT_AssertIsTrue(y1 == y4);
+        UT_Compare(x1, x4);
+        UT_Compare(y1, y4);
 
-        UT_AssertIsTrue(x3 == x2);
-        UT_AssertIsTrue(y3 == y2);
+        UT_Compare(x3, x2);
+        UT_Compare(y3, y2);
     }
 };
 
@@ -207,13 +218,11 @@ struct CopyMoveTest
         X src = InitRandom<X>();
         
         X x(src);
-        UT_AssertIsTrue(x == src);
+        UT_Compare(x, src);
 
-#ifndef BOND_NO_CXX11_RVALUE_REFERENCES
         X y(std::move(x)); 
-        UT_AssertIsTrue(y == src);
+        UT_Compare(y, src);
         UT_AssertIsTrue(moved(x));    
-#endif
     }
 };
 
@@ -274,6 +283,8 @@ TEST_CASE_BEGIN(EnumScopeTest)
     UT_AssertIsTrue(image1.fruit1 == 5);
     UT_AssertIsTrue(image1.fruit2 == 6);
 
+    UT_AssertIsTrue(EnumType1::MinInt == std::numeric_limits<int32_t>::min());
+
     // This test causes ambiguity on Clang - need to invetigate
     /*EnumHelperTest<enum ToEnum>("ToEnum");
     EnumHelperTest<enum ToString>("ToString");
@@ -287,11 +298,13 @@ TEST_CASE_END
 
 TEST_CASE_BEGIN(SimpleBinaryVersion)
 {
+    BOOST_STATIC_ASSERT(bond::default_version<bond::SimpleBinaryReader<bond::InputBuffer>>::value == bond::v1);
+
     SimpleListsStruct from = InitRandom<SimpleListsStruct>();
 
     {
         bond::OutputBuffer output_buffer;
-    
+
         // serialize using default version of SimpleBinary reader
         bond::SimpleBinaryWriter<bond::OutputBuffer> output(output_buffer);
 
@@ -299,32 +312,32 @@ TEST_CASE_BEGIN(SimpleBinaryVersion)
         bond::InputBuffer input_buffer(output_buffer.GetBuffer());
 
         {
-            // deserialize using version 2 of SimpleBinary reader
-            bond::SimpleBinaryReader<bond::InputBuffer> input(input_buffer, 2);
-    
+            // deserialize using version 1 of SimpleBinary reader
+            bond::SimpleBinaryReader<bond::InputBuffer> input(input_buffer, 1);
+
             SimpleListsStruct to;
-    
+
             bond::Deserialize(input, to);
 
-            UT_AssertIsTrue(from == to);
+            UT_Compare(from, to);
         }
 
         {
             // deserialize using default version of SimpleBinary reader
             bond::SimpleBinaryReader<bond::InputBuffer> input(input_buffer);
-    
+
             SimpleListsStruct to;
-    
+
             bond::Deserialize(input, to);
 
-            UT_AssertIsTrue(from == to);
+            UT_Compare(from, to);
         }
     }
 
 
     {
         bond::OutputBuffer output_buffer;
-    
+
         // serialize using version 2 of SimpleBinary writer
         bond::SimpleBinaryWriter<bond::OutputBuffer> output(output_buffer, 2);
 
@@ -334,29 +347,18 @@ TEST_CASE_BEGIN(SimpleBinaryVersion)
         {
             // deserialize using version 2 of SimpleBinary reader
             bond::SimpleBinaryReader<bond::InputBuffer> input(input_buffer, 2);
-    
+
             SimpleListsStruct to;
-    
+
             bond::Deserialize(input, to);
 
-            UT_AssertIsTrue(from == to);
-        }
-
-        {
-            // deserialize using default version of SimpleBinary reader
-            bond::SimpleBinaryReader<bond::InputBuffer> input(input_buffer);
-    
-            SimpleListsStruct to;
-    
-            bond::Deserialize(input, to);
-
-            UT_AssertIsTrue(from == to);
+            UT_Compare(from, to);
         }
     }
 
     {
         bond::OutputBuffer output_buffer;
-    
+
         // serialize using version 1 of SimpleBinary writer
         bond::SimpleBinaryWriter<bond::OutputBuffer> output(output_buffer, 1);
 
@@ -366,17 +368,50 @@ TEST_CASE_BEGIN(SimpleBinaryVersion)
         {
             // deserialize using version 1 of SimpleBinary reader
             bond::SimpleBinaryReader<bond::InputBuffer> input(input_buffer, 1);
-    
+
             SimpleListsStruct to;
-    
+
             bond::Deserialize(input, to);
 
-            UT_AssertIsTrue(from == to);
+            UT_Compare(from, to);
+        }
+
+        {
+            // deserialize using default version of SimpleProtocol reader
+            bond::SimpleBinaryReader<bond::InputBuffer> input(input_buffer);
+
+            SimpleListsStruct to;
+
+            bond::Deserialize(input, to);
+
+            UT_Compare(from, to);
         }
     }
 }
 TEST_CASE_END
 
+TEST_CASE_BEGIN(MakeBoxTest)
+{
+    // const T&
+    {
+        const int x = 123;
+        bond::Box<int> b = bond::make_box(x);
+        UT_AssertAreEqual(b.value, x);
+    }
+    // T&
+    {
+        int x = 123;
+        bond::Box<int> b = bond::make_box(x);
+        UT_AssertAreEqual(b.value, x);
+    }
+    // T&&
+    {
+        int x = 123;
+        bond::Box<int> b = bond::make_box(std::move(x));
+        UT_AssertAreEqual(b.value, x);
+    }
+}
+TEST_CASE_END
 
 void BasicTest::Initialize()
 {
@@ -407,5 +442,13 @@ void BasicTest::Initialize()
     AddTestCase<TEST_ID(0xb06), SimpleBinaryVersion>(suite, "Simple Protocol version");
     AddTestCase<TEST_ID(0xb07), CopyMoveTests>(suite, "Copy and Move tests");
     AddTestCase<TEST_ID(0xb08), EnumScopeTest>(suite, "Enum scope tests");
+    AddTestCase<TEST_ID(0xb09), MakeBoxTest>(suite, "make_box tests");
+}
+
+
+bool init_unit_test()
+{
+    BasicTest::Initialize();
+    return true;
 }
 

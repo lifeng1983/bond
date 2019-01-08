@@ -26,13 +26,13 @@ using boost::mpl::_;
 typedef boost::mpl::list
     <
 #ifndef UNIT_TEST_TYPE_SUBSET
-        uint8_t, uint16_t, uint32_t, uint64_t, 
+        uint8_t, uint16_t, uint32_t, uint64_t,
         int8_t,   int16_t,  int32_t,  int64_t,
         bool, float, double
 #else
         int32_t, double
 #endif
-    > 
+    >
     NumericTypes;
 
 typedef boost::mpl::list
@@ -47,8 +47,8 @@ typedef boost::mpl::list
 typedef boost::mpl::copy
     <
         StringTypes,
-        boost::mpl::front_inserter<NumericTypes> 
-    >::type 
+        boost::mpl::front_inserter<NumericTypes>
+    >::type
     SortableTypes;
 
 typedef boost::mpl::push_front
@@ -65,7 +65,7 @@ struct ListTypes
     typedef boost::mpl::list
     <
 #ifndef UNIT_TEST_TYPE_SUBSET
-        list<T>, 
+        list<T>,
         vector<T>
 #else
         vector<T>
@@ -80,12 +80,12 @@ struct SkipTypes
     typedef boost::mpl::list
     <
 #ifndef UNIT_TEST_TYPE_SUBSET
-        BondStruct<T>, 
+        BondStruct<T>,
         vector<list<T> >,
         //list<T>,
         set<T>,
-        map<string, T>, 
-        //BondStruct<list<T> >, 
+        map<string, T>,
+        //BondStruct<list<T> >,
         bond::nullable<T>,
         bond::nullable<BondStruct<T> >,
         vector<BondStruct<list<T> > >
@@ -96,28 +96,46 @@ struct SkipTypes
 };
 
 
-#pragma warning(push)
-// warning C4310: cast truncates constant value
-#pragma warning(disable: 4310)
+template <typename T> struct
+is_protocols
+    : std::false_type {};
+
+template <typename... T> struct
+is_protocols<bond::Protocols<T...>>
+    : std::true_type {};
+
+template <> struct
+is_protocols<bond::BuiltInProtocols>
+    : std::true_type {};
+
 
 template <typename T>
 const std::vector<T>& IntegerConstants()
 {
+#ifdef _MSC_VER
+    #pragma warning (push)
+    // warning C4310: cast truncates constant value
+    #pragma warning (disable: 4310)
+#endif
+
     static std::vector<T> constants = boost::assign::list_of
         ((T)-1)((T)0)((T)1)((T)2)((T)3)((T)4)((T)5)((T)6)((T)7)((T)8)((T)9)
         ((T)SCHAR_MAX)((T)SCHAR_MIN)((T)UCHAR_MAX)
-        ((T)SHRT_MIN)((T)SHRT_MAX)((T)USHRT_MAX)  
-        ((T)INT_MIN)((T)INT_MAX)((T)UINT_MAX)     
+        ((T)SHRT_MIN)((T)SHRT_MAX)((T)USHRT_MAX)
+        ((T)INT_MIN)((T)INT_MAX)((T)UINT_MAX)
         ((T)LLONG_MAX)((T)LLONG_MIN)((T)ULLONG_MAX);
+
+#ifdef _MSC_VER
+    #pragma warning (pop)
+#endif
 
     return constants;
 }
 
-#pragma warning(pop)
-
 
 // CreateSelfMappings creates mappings compatible with MapTo<T> transform
-// for every field of the specified bond structure. 
+// for every field of the specified bond structure.
+template <typename Protocols>
 class CreateSelfMappings
     : public bond::SerializingTransform
 {
@@ -141,7 +159,7 @@ public:
     bool Base(const T& value) const
     {
         _path.push_back(bond::mapping_base);
-        bond::Apply(CreateSelfMappings(_mappings[bond::mapping_base].fields, _path), value);
+        bond::Apply<Protocols>(CreateSelfMappings(_mappings[bond::mapping_base].fields, _path), value);
         _path.pop_back();
         return false;
     }
@@ -162,9 +180,9 @@ public:
     Field(uint16_t id, const bond::Metadata& /*metadata*/, const T& value) const
     {
         _path.push_back(id);
-        bond::Apply(CreateSelfMappings(_mappings[id].fields, _path), value);
+        bond::Apply<Protocols>(CreateSelfMappings(_mappings[id].fields, _path), value);
         _path.pop_back();
-        
+
         return false;
     }
 
@@ -174,7 +192,7 @@ public:
         _path.push_back(id);
         _mappings[id].path = _path;
         _path.pop_back();
-        
+
         return false;
     }
 
@@ -253,78 +271,78 @@ struct Factory<bond::CompactBinaryWriter<Buffer> >
 };
 
 
-template <typename Reader, typename Writer, typename T>
+template <typename Reader, typename Writer, typename Protocols = bond::BuiltInProtocols, typename T>
 Reader Serialize(const T& x, uint16_t version = bond::v1)
 {
     typename Writer::Buffer output_buffer(4096);
-    
+
     // serialize value to output
     Factory<Writer>::Call(output_buffer, version, boost::bind(
-        bond::Serialize<T, Writer>, x, _1));
+        bond::Serialize<Protocols, T, Writer>, x, _1));
 
     typename Reader::Buffer input_buffer(output_buffer.GetBuffer());
     return Factory<Reader>::Create(input_buffer, version);
 }
 
 
-template <typename Reader, typename Writer, typename From, typename To>
+template <typename Reader, typename Writer, typename Protocols = bond::BuiltInProtocols, typename From, typename To>
 typename boost::disable_if<bond::uses_static_parser<Reader> >::type
 SerializeDeserialize(const From& from, To& to, uint16_t version = bond::v1)
 {
-    bond::Deserialize(Serialize<Reader, Writer>(from, version), to);
+    bond::Deserialize<Protocols>(Serialize<Reader, Writer, Protocols>(from, version), to);
 }
 
 
-template <typename Reader, typename Writer, typename From, typename To>
+template <typename Reader, typename Writer, typename Protocols = bond::BuiltInProtocols, typename From, typename To>
 typename boost::enable_if<bond::uses_static_parser<Reader> >::type
 SerializeDeserialize(const From& from, To& to, uint16_t version = bond::v1)
 {
-    bond::bonded<void>(Serialize<Reader, Writer>(from, version), bond::GetRuntimeSchema<From>()).Deserialize(to);
+    bond::bonded<void>(Serialize<Reader, Writer, Protocols>(from, version), bond::GetRuntimeSchema<From>()).template Deserialize<Protocols>(to);
 }
 
 
 
-template <typename Reader, typename Writer, typename Payload, typename T>
+template <typename Reader, typename Writer, typename Protocols = bond::BuiltInProtocols, typename Payload, typename T>
 Reader Merge(const Payload& payload, const T& x, uint16_t version = bond::v1)
 {
     typename Writer::Buffer output_buffer;
 
     // merge x with serialized payload into output
     Factory<Writer>::Call(output_buffer, version, boost::bind(
-        bond::Merge<T, Reader, Writer>, x, Serialize<Reader, Writer>(payload, version), _1));
+        bond::Merge<Protocols, T, Reader, Writer>, x, Serialize<Reader, Writer, Protocols>(payload, version), _1));
 
     typename Reader::Buffer input_buffer(output_buffer.GetBuffer());
-    
+
     return Factory<Reader>::Create(input_buffer, version);
  }
 
 
-template <typename Reader, typename Writer, typename BondedType, typename T>
+template <typename Reader, typename Writer, typename BondedType, typename Protocols = bond::BuiltInProtocols, typename T>
 bond::bonded<BondedType> GetBonded(T x, uint16_t version = bond::v1)
 {
-    return bond::bonded<BondedType>(Serialize<Reader, Writer>(x, version));
+    return bond::bonded<BondedType>(Serialize<Reader, Writer, Protocols>(x, version));
 }
 
 
-template <typename T>
+template <typename Protocols = bond::BuiltInProtocols, typename T>
 void InitRandom(T& x, uint32_t max_string_length = c_max_string_length, uint32_t max_list_size = c_max_list_size)
 {
     // Instead of deserializing directly from RandomProtocolReader to instance of T
     // we transcode from Random protocol to Fast protocol and then deserialize
     // the Fast protocol payload into the instance of T. This obvioulsy take longer
     // at runtime, but it compiles faster; build time is the bottleneck for unit tests.
-    
+
     bond::RandomProtocolReader                      random_reader(max_string_length, max_list_size);
     bond::bonded<void, bond::RandomProtocolReader&> random(random_reader, bond::GetRuntimeSchema<T>());
 
     bond::OutputBuffer                              buffer(1024);
     bond::FastBinaryWriter<bond::OutputBuffer>     writer(buffer);
 
-    random.Serialize(writer);
+    random.template Serialize<Protocols>(writer);
 
     bond::FastBinaryReader<bond::InputBuffer>      reader(buffer.GetBuffer());
 
-    bond::Deserialize(reader, x);
+    bond::Deserialize<Protocols>(reader, x);
 }
 
 
@@ -342,146 +360,158 @@ void Fixup(SkipStruct<T>& x)
 }
 
 
-template <typename T>
+template <typename T, typename Protocols = bond::BuiltInProtocols>
 T InitRandom(uint32_t max_string_length = c_max_string_length, uint32_t max_list_size = c_max_list_size)
 {
     T x;
 
-    InitRandom(x, max_string_length, max_list_size);
+    InitRandom<Protocols>(x, max_string_length, max_list_size);
 
     return x;
 }
 
 
-template <typename Field> struct 
+template <typename Field> struct
 is_optional_field
-{
-    static const bool value = std::is_same<typename Field::field_modifier, bond::reflection::optional_field_modifier>::value;
-};
+    : std::is_same<typename Field::field_modifier, bond::reflection::optional_field_modifier> {};
 
 
-template <typename T>
+template <typename Protocols = bond::BuiltInProtocols, typename T>
 void CopyAndMove(const T& src)
-{        
+{
     T x(src);
-    UT_AssertIsTrue(Equal(x, src));
+    UT_Equal_P(x, src, Protocols);
 
 #ifndef BOND_NO_CXX11_RVALUE_REFERENCES
-    T y(std::move(x)); 
-    UT_AssertIsTrue(Equal(y, src));
+    T y(std::move(x));
+    UT_Equal_P(y, src, Protocols);
     UT_AssertIsTrue(moved(x));
 #endif
 }
 
 
-template <typename Reader, typename Writer, typename From, typename To, typename BondedType>
+template <typename Reader, typename Writer, typename From, typename To, typename BondedType, typename Protocols = bond::BuiltInProtocols>
 void Binding(const From& from, uint16_t version = bond::v1)
 {
-    BOOST_STATIC_ASSERT((std::is_same<BondedType, From>::value 
+    BOOST_STATIC_ASSERT((std::is_same<BondedType, From>::value
                       || !bond::uses_static_parser<Reader>::value));
 
     // Compile-time schema
     {
-        bond::bonded<BondedType> bonded(GetBonded<Reader, Writer, BondedType>(from, version));
+        bond::bonded<BondedType> bonded(GetBonded<Reader, Writer, BondedType, Protocols>(from, version));
 
         To to;
-        
+
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4127) // C4127: conditional expression is constant
+#endif
         if (boost::mpl::count_if<typename From::Schema::fields, is_optional_field<_> >::value == 0)
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
         {
-            to = InitRandom<To>();
+            to = InitRandom<To, Protocols>();
             Fixup(to);
         }
 
-        Apply(bond::To<To>(to), bonded);
+        bond::Apply<Protocols>(bond::To<To, Protocols>(to), bonded);
 
-        UT_AssertIsTrue(Equal(from, to));
+        UT_Equal_P(from, to, Protocols);
     }
 
     // Runtime schema
     {
-        bond::bonded<void> bonded(GetBonded<Reader, Writer, BondedType>(from, version));
+        bond::bonded<void> bonded(GetBonded<Reader, Writer, BondedType, Protocols>(from, version));
 
         To to;
-        
+
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4127) // C4127: conditional expression is constant
+#endif
         if (boost::mpl::count_if<typename From::Schema::fields, is_optional_field<_> >::value == 0)
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
         {
-            to = InitRandom<To>();
+            to = InitRandom<To, Protocols>();
             Fixup(to);
         }
 
-        Apply(bond::To<To>(to), bonded);
+        bond::Apply<Protocols>(bond::To<To, Protocols>(to), bonded);
 
-        UT_AssertIsTrue(Equal(from, to));
+        UT_Equal_P(from, to, Protocols);
     }
 
-    CopyAndMove(from);
+    CopyAndMove<Protocols>(from);
 }
 
 
-template <typename To, typename BondedType>
+template <typename To, typename BondedType, typename Protocols = bond::BuiltInProtocols>
 typename boost::enable_if_c<(bond::detail::hierarchy_depth<typename BondedType::Schema>::value
                           == bond::detail::hierarchy_depth<typename To::Schema>::value)>::type
 InitMappings(bond::Mappings& mappings)
 {
     To to;
-    bond::Apply(CreateSelfMappings(mappings), to);
+    bond::Apply<Protocols>(CreateSelfMappings<Protocols>(mappings), to);
 }
 
 
-template <typename To, typename BondedType>
+template <typename To, typename BondedType, typename Protocols = bond::BuiltInProtocols>
 typename boost::enable_if_c<(bond::detail::hierarchy_depth<typename BondedType::Schema>::value
                            > bond::detail::hierarchy_depth<typename To::Schema>::value)>::type
 InitMappings(bond::Mappings& mappings)
 {
     // The data we are deserializing has deeper hierarchy than the target variable
     // so we will only map fields of the base struct, and recurse to next level.
-    InitMappings<To, typename BondedType::Schema::base>(mappings[bond::mapping_base].fields);
+    InitMappings<To, typename BondedType::Schema::base, Protocols>(mappings[bond::mapping_base].fields);
 }
 
 
-template <typename Reader, typename Writer, typename From, typename To, typename BondedType>
+template <typename Reader, typename Writer, typename From, typename To, typename BondedType, typename Protocols = bond::BuiltInProtocols>
 void Mapping(const From& from, uint16_t version = bond::v1)
 {
 #ifdef UNIT_TEST_MAPPING
-    BOOST_STATIC_ASSERT((std::is_same<BondedType, From>::value 
+    BOOST_STATIC_ASSERT((std::is_same<BondedType, From>::value
                       || !bond::uses_static_parser<Reader>::value));
-    
+
     bond::Mappings mappings;
 
     InitMappings<To, BondedType>(mappings);
 
     // Compile-time schema
     {
-        bond::bonded<BondedType> bonded(GetBonded<Reader, Writer, BondedType>(from, version));
+        bond::bonded<BondedType> bonded(GetBonded<Reader, Writer, BondedType, Protocols>(from, version));
 
         To to;
-        
+
         if (boost::mpl::count_if<From::Schema::fields, is_optional_field<_> >::value == 0)
         {
-            to = InitRandom<To>();
+            to = InitRandom<To, Protocols>();
             Fixup(to);
         }
 
-        Apply(bond::MapTo<To>(to, mappings), bonded);
+        bond::Apply<Protocols>(bond::MapTo<To, Protocols>(to, mappings), bonded);
 
-        UT_AssertIsTrue(Equal(from, to));
+        UT_Equal_P(from, to, Protocols);
     }
 
     // Runtime schema
     {
-        bond::bonded<void> bonded(GetBonded<Reader, Writer, BondedType>(from, version));
+        bond::bonded<void> bonded(GetBonded<Reader, Writer, BondedType, Protocols>(from, version));
 
         To to;
-        
+
         if (boost::mpl::count_if<From::Schema::fields, is_optional_field<_> >::value == 0)
         {
-            to = InitRandom<To>();
+            to = InitRandom<To, Protocols>();
             Fixup(to);
         }
 
-        Apply(bond::MapTo<To>(to, mappings), bonded);
+        bond::Apply<Protocols>(bond::MapTo<To, Protocols>(to, mappings), bonded);
 
-        UT_AssertIsTrue(Equal(from, to));
+        UT_Equal_P(from, to, Protocols);
     }
 #else
     (void)from;
@@ -490,222 +520,178 @@ void Mapping(const From& from, uint16_t version = bond::v1)
 }
 
 
-extern bool g_merging;
-
-namespace boost
-{
-    inline void assertion_failed(char const * expr, char const * function, char const * file, long line)
-    {
-        // Ignore assert on using non-clean object for deserialization during merging test
-        if (!(g_merging && !strcmp(expr, "detail::OptionalDefault<T>(_var)")))
-        {
-            fprintf(stderr, "Assert %s failed in %s, %s(%ld)", expr, function, file, line);
-            UT_AssertIsTrue(false);
-        }
-    }
-}
-
-
-template <typename Reader, typename Writer, typename Payload, typename T>
-void Merging(Payload payload, const T& obj, uint16_t version = bond::v1, bool mergeByDeserialize = true)
-{
-    Reader merged = Merge<Reader, Writer>(payload, obj, version);
-
-    // Deserialize merged into T and compare against obj
-    {
-        T to;
-        
-        if (boost::mpl::count_if<typename T::Schema::fields, is_optional_field<_> >::value == 0)
-        {
-            to = InitRandom<T>();
-            Fixup(to);
-        }
-
-        Deserialize(merged, to);
-
-        UT_AssertIsTrue(Equal(obj, to));
-    }
-
-    // Deserialize merged into Payload and compare against combination of the 
-    // orginal payload and the obj.
-    {
-        Payload to;
-
-        if (boost::mpl::count_if<typename Payload::Schema::fields, is_optional_field<_> >::value == 0)
-        {
-            to = InitRandom<Payload>();
-            Fixup(to);
-        }
-        
-        Deserialize(merged, to);
-
-        if (mergeByDeserialize)
-        {
-            // Ignore assert on using non-clean object for deserialization 
-            g_merging = true;
-            Deserialize(Serialize<Reader, Writer>(obj, version), payload);
-            g_merging = false;
-
-            UT_AssertIsTrue(Equal(payload, to));
-        }
-        else
-        {
-            UT_AssertIsTrue(MergedEqual(payload, to, obj));
-        }
-    }
-}
-
-
-template <typename Reader, typename Writer, typename From, typename To, typename BondedType>
+template <typename Reader, typename Writer, typename From, typename To, typename BondedType, typename Protocols = bond::BuiltInProtocols>
 void AllBinding()
 {
     // default value
-    Binding<Reader, Writer, From, To, BondedType>(From());
-    Binding<Reader, Writer, From, To, BondedType>(From(), Reader::version);
-    
+    Binding<Reader, Writer, From, To, BondedType, Protocols>(From());
+    Binding<Reader, Writer, From, To, BondedType, Protocols>(From(), Reader::version);
+
     // random values
     for (uint32_t i = 0; i < c_iterations; ++i)
     {
-        Binding<Reader, Writer, From, To, BondedType>(InitRandom<From>());
-        Binding<Reader, Writer, From, To, BondedType>(InitRandom<From>(), Reader::version);
+        Binding<Reader, Writer, From, To, BondedType, Protocols>(InitRandom<From, Protocols>());
+        Binding<Reader, Writer, From, To, BondedType, Protocols>(InitRandom<From, Protocols>(), Reader::version);
     }
 }
 
 
-template <typename Reader, typename Writer, typename From, typename To, typename BondedType>
+template <typename Reader, typename Writer, typename From, typename To, typename BondedType, typename Protocols = bond::BuiltInProtocols>
 void AllMapping()
 {
     // default value
-    Mapping<Reader, Writer, From, To, BondedType>(From());
-    Mapping<Reader, Writer, From, To, BondedType>(From(), Reader::version);
-    
+    Mapping<Reader, Writer, From, To, BondedType, Protocols>(From());
+    Mapping<Reader, Writer, From, To, BondedType, Protocols>(From(), Reader::version);
+
     // random values
     for (uint32_t i = 0; i < c_iterations; ++i)
     {
-        Mapping<Reader, Writer, From, To, BondedType>(InitRandom<From>());
-        Mapping<Reader, Writer, From, To, BondedType>(InitRandom<From>(), Reader::version);
+        Mapping<Reader, Writer, From, To, BondedType, Protocols>(InitRandom<From, Protocols>());
+        Mapping<Reader, Writer, From, To, BondedType, Protocols>(InitRandom<From, Protocols>(), Reader::version);
     }
 }
 
 
-template <typename Reader, typename Writer, typename Payload, typename T>
-void MergingRandom()
-{
-    // random values
-    for (uint32_t i = 0; i < c_iterations; ++i)
-    {
-        Merging<Reader, Writer>(InitRandom<Payload>(), InitRandom<T>());
-        Merging<Reader, Writer>(InitRandom<Payload>(), InitRandom<T>(), Reader::version);
-    }
-}
-
-
-template <typename Reader, typename Writer, typename Payload, typename T>
-void AllMerging()
-{
-    // default value
-    Merging<Reader, Writer>(Payload(), T());
-    Merging<Reader, Writer>(Payload(), T(), Reader::version);
-    Merging<Reader, Writer>(InitRandom<Payload>(), T());
-    Merging<Reader, Writer>(InitRandom<Payload>(), T(), Reader::version);
-    Merging<Reader, Writer>(Payload(), InitRandom<T>());
-    Merging<Reader, Writer>(Payload(), InitRandom<T>(), Reader::version);
-    
-    // random values
-    MergingRandom<Reader, Writer, Payload, T>();
-}
-
-
-template <typename Reader, typename Writer, typename From, typename To>
+template <typename Reader, typename Writer, typename From, typename To, typename Protocols = bond::BuiltInProtocols>
 typename boost::disable_if<bond::uses_static_parser<Reader> >::type
 BindingAndMapping(const From& from)
 {
-    Binding<Reader, Writer, From, To, From>(from);
-    Mapping<Reader, Writer, From, To, From>(from);
-    
+    Binding<Reader, Writer, From, To, From, Protocols>(from);
+    Mapping<Reader, Writer, From, To, From, Protocols>(from);
+
     // For dynamic parser the schema doesn't have to exactly match the payload
-    Binding<Reader, Writer, From, To, To>(from);
-    Mapping<Reader, Writer, From, To, To>(from);
+    Binding<Reader, Writer, From, To, To, Protocols>(from);
+    Mapping<Reader, Writer, From, To, To, Protocols>(from);
 }
 
 
-template <typename Reader, typename Writer, typename From, typename To>
+template <typename Reader, typename Writer, typename From, typename To, typename Protocols = bond::BuiltInProtocols>
 typename boost::enable_if<bond::uses_static_parser<Reader> >::type
 BindingAndMapping(const From& from)
 {
-    Binding<Reader, Writer, From, To, From>(from);
-    Mapping<Reader, Writer, From, To, From>(from);
+    Binding<Reader, Writer, From, To, From, Protocols>(from);
+    Mapping<Reader, Writer, From, To, From, Protocols>(from);
 }
 
 
-template <typename Reader, typename Writer, typename T>
-void AllBindingAndMapping()
-{
-    AllBinding<Reader, Writer, T, T, T>();
-    AllMapping<Reader, Writer, T, T, T>();
-}
-
-
-template <typename Reader, typename Writer, typename From, typename To>
-typename boost::disable_if<bond::uses_static_parser<Reader> >::type
+template <typename Reader, typename Writer, typename T, typename Protocols = bond::BuiltInProtocols>
+typename boost::enable_if_c<!is_protocols<T>::value && is_protocols<Protocols>::value>::type
 AllBindingAndMapping()
 {
-    AllBinding<Reader, Writer, From, To, From>();
-    AllMapping<Reader, Writer, From, To, From>();
-    
+    AllBinding<Reader, Writer, T, T, T, Protocols>();
+    AllMapping<Reader, Writer, T, T, T, Protocols>();
+}
+
+
+template <typename Reader, typename Writer, typename From, typename To, typename Protocols = bond::BuiltInProtocols>
+typename boost::enable_if_c<!bond::uses_static_parser<Reader>::value && !is_protocols<To>::value && is_protocols<Protocols>::value>::type
+AllBindingAndMapping()
+{
+    AllBinding<Reader, Writer, From, To, From, Protocols>();
+    AllMapping<Reader, Writer, From, To, From, Protocols>();
+
     // For dynamic parser the schema doesn't have to exactly match the payload
-    AllBinding<Reader, Writer, From, To, To>();
-    AllMapping<Reader, Writer, From, To, To>();
+    AllBinding<Reader, Writer, From, To, To, Protocols>();
+    AllMapping<Reader, Writer, From, To, To, Protocols>();
 }
 
 
-template <typename Reader, typename Writer, typename From, typename To>
-typename boost::enable_if<bond::uses_static_parser<Reader> >::type
+template <typename Reader, typename Writer, typename From, typename To, typename Protocols = bond::BuiltInProtocols>
+typename boost::enable_if_c<bond::uses_static_parser<Reader>::value && !is_protocols<To>::value && is_protocols<Protocols>::value>::type
 AllBindingAndMapping()
 {
-    AllBinding<Reader, Writer, From, To, From>();
-    AllMapping<Reader, Writer, From, To, From>();
+    AllBinding<Reader, Writer, From, To, From, Protocols>();
+    AllMapping<Reader, Writer, From, To, From, Protocols>();
 }
 
 
-template <typename Reader, typename Writer, typename From, typename To, typename BondedType>
-typename boost::disable_if<bond::uses_static_parser<Reader> >::type
+template <typename Reader, typename Writer, typename From, typename To, typename BondedType, typename Protocols = bond::BuiltInProtocols>
+typename boost::enable_if_c<!bond::uses_static_parser<Reader>::value && !is_protocols<BondedType>::value && is_protocols<Protocols>::value>::type
 AllBindingAndMapping()
 {
-    AllBinding<Reader, Writer, From, To, BondedType>();
-    AllMapping<Reader, Writer, From, To, BondedType>();
+    AllBinding<Reader, Writer, From, To, BondedType, Protocols>();
+    AllMapping<Reader, Writer, From, To, BondedType, Protocols>();
 }
 
 
-template <typename Reader, typename Writer, typename From, typename To, typename BondedType>
-typename boost::enable_if<bond::uses_static_parser<Reader> >::type
+template <typename Reader, typename Writer, typename From, typename To, typename BondedType, typename Protocols = bond::BuiltInProtocols>
+typename boost::enable_if_c<bond::uses_static_parser<Reader>::value && !is_protocols<BondedType>::value && is_protocols<Protocols>::value>::type
 AllBindingAndMapping()
 {
     // This function is noop for static parser.
     // Calling it with BondedType equal to From or To is most likely unintended
-    BOOST_STATIC_ASSERT((!std::is_same<BondedType, From>::value 
+    BOOST_STATIC_ASSERT((!std::is_same<BondedType, From>::value
                       && !std::is_same<BondedType, To>::value));
 }
 
 
 // Unit test wrappers for AllBindingAndMapping
+
+#if !defined(_MSC_VER) || _MSC_VER >= 1900
+
+template <typename Reader, typename Writer, typename T, typename Protocols = bond::BuiltInProtocols>
+TEST_CASE_BEGIN(AllBindingAndMapping1)
+{
+    AllBindingAndMapping<Reader, Writer, T, Protocols>();
+}
+TEST_CASE_END
+
+template <typename Reader, typename Writer, typename From, typename To, typename Protocols = bond::BuiltInProtocols>
+TEST_CASE_BEGIN(AllBindingAndMapping2)
+{
+    AllBindingAndMapping<Reader, Writer, From, To, Protocols>();
+}
+TEST_CASE_END
+
+template <typename Reader, typename Writer, typename From, typename To, typename BondedType, typename Protocols = bond::BuiltInProtocols>
+TEST_CASE_BEGIN(AllBindingAndMapping3)
+{
+    AllBindingAndMapping<Reader, Writer, From, To, BondedType, Protocols>();
+}
+TEST_CASE_END
+
+#else
+
 template <typename Reader, typename Writer, typename T>
 TEST_CASE_BEGIN(AllBindingAndMapping1)
 {
-    AllBindingAndMapping<Reader, Writer, T>();
+    AllBindingAndMapping<Reader, Writer, T, bond::BuiltInProtocols>();
+}
+TEST_CASE_END
+
+template <typename Reader, typename Writer, typename T, typename Protocols>
+TEST_CASE_BEGIN(AllBindingAndMapping1_CustomProtocols)
+{
+    AllBindingAndMapping<Reader, Writer, T, Protocols>();
 }
 TEST_CASE_END
 
 template <typename Reader, typename Writer, typename From, typename To>
 TEST_CASE_BEGIN(AllBindingAndMapping2)
 {
-    AllBindingAndMapping<Reader, Writer, From, To>();
+    AllBindingAndMapping<Reader, Writer, From, To, bond::BuiltInProtocols>();
+}
+TEST_CASE_END
+
+template <typename Reader, typename Writer, typename From, typename To, typename Protocols>
+TEST_CASE_BEGIN(AllBindingAndMapping2_CustomProtocols)
+{
+    AllBindingAndMapping<Reader, Writer, From, To, Protocols>();
 }
 TEST_CASE_END
 
 template <typename Reader, typename Writer, typename From, typename To, typename BondedType>
 TEST_CASE_BEGIN(AllBindingAndMapping3)
 {
-    AllBindingAndMapping<Reader, Writer, From, To, BondedType>();
+    AllBindingAndMapping<Reader, Writer, From, To, BondedType, bond::BuiltInProtocols>();
 }
 TEST_CASE_END
+
+template <typename Reader, typename Writer, typename From, typename To, typename BondedType, typename Protocols>
+TEST_CASE_BEGIN(AllBindingAndMapping3_CustomProtocols)
+{
+    AllBindingAndMapping<Reader, Writer, From, To, BondedType, Protocols>();
+}
+TEST_CASE_END
+
+#endif

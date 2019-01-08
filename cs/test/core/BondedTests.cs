@@ -2,13 +2,14 @@
 {
     using System;
     using System.IO;
-    using Microsoft.VisualStudio.TestTools.UnitTesting;
+    using NUnit.Framework;
     using Bond;
     using Bond.Protocols;
     using Bond.IO;
     using Bond.IO.Unsafe;
+    using Bond.Internal.Reflection;
 
-    [TestClass]
+    [TestFixture]
     public class BondedTests
     {
         // Deserialize T from IBonded<T> containing an instance or payload of derived class.
@@ -20,17 +21,23 @@
 
             IBonded<T> bondedInstance = new Bonded<D>(from);
             IBonded<T> bondedPayloadCB = Util.MakeBondedCB(from);
+            IBonded<T> bondedPayloadCB2 = Util.MakeBondedCB2(from);
             IBonded<T> bondedPayloadSP = Util.MakeBondedSP(from);
+            IBonded<BondClass<IBonded<T>>> nestedBonded =
+                new Bonded<BondClass<IBonded<T>>>(new BondClass<IBonded<T>> { field = bondedInstance });
 
             for (var i = 2; --i != 0;)
             {
                 var to1 = bondedInstance.Deserialize();
                 var to2 = bondedPayloadCB.Deserialize();
+                var toCb2 = bondedPayloadCB2.Deserialize();
                 var to3 = bondedPayloadSP.Deserialize();
 
                 Assert.IsTrue(to1.IsEqual<T>(from));
                 Assert.IsTrue(to2.IsEqual<T>(from));
+                Assert.IsTrue(toCb2.IsEqual<T>(from));
                 Assert.IsTrue(to3.IsEqual<T>(from));
+                Assert.IsTrue(nestedBonded.Deserialize().field.Deserialize().IsEqual(from));
             }
         }
 
@@ -43,16 +50,19 @@
 
             IBonded<T> bondedInstance = new Bonded<D>(from);
             IBonded<T> bondedPayloadCB = Util.MakeBondedCB(from);
+            IBonded<T> bondedPayloadCB2 = Util.MakeBondedCB2(from);
             IBonded<T> bondedPayloadSP = Util.MakeBondedSP(from);
 
             for (var i = 2; --i != 0;)
             {
                 var to1 = bondedInstance.Deserialize<D>();
                 var to2 = bondedPayloadCB.Deserialize<D>();
+                var toCb2 = bondedPayloadCB2.Deserialize<D>();
                 var to3 = bondedPayloadSP.Deserialize<D>();
 
                 Assert.IsTrue(to1.IsEqual<D>(from));
                 Assert.IsTrue(to2.IsEqual<D>(from));
+                Assert.IsTrue(toCb2.IsEqual<D>(from));
                 Assert.IsTrue(to3.IsEqual<D>(from));
             }
         }
@@ -73,6 +83,7 @@
             };
 
             streamRoundtrip(Util.SerializeCB, Util.DeserializeCB<D>);
+            streamRoundtrip(Util.SerializeCB2, Util.DeserializeCB2<D>);
             streamRoundtrip(Util.SerializeFB, Util.DeserializeFB<D>);
             streamRoundtrip(Util.SerializeSP, Util.DeserializeSP<D, D>);
             streamRoundtrip(Util.SerializeXml, Util.DeserializeXml<D>);
@@ -92,6 +103,7 @@
             };
 
             streamRoundtrip(Util.SerializeCB, Util.DeserializeCB<D>);
+            streamRoundtrip(Util.SerializeCB2, Util.DeserializeCB2<D>);
             streamRoundtrip(Util.SerializeFB, Util.DeserializeFB<D>);
         }
 
@@ -103,13 +115,16 @@
 
             IBonded<T> bondedInstance = new Bonded<D>(from);
             IBonded<T> bondedPayloadCB = Util.MakeBondedCB(from);
+            IBonded<T> bondedPayloadCB2 = Util.MakeBondedCB2(from);
             IBonded<T> bondedPayloadSP = Util.MakeBondedSP(from);
 
             BondedSerialize(from, bondedInstance);
             BondedSerialize(from, bondedPayloadCB);
+            BondedSerialize(from, bondedPayloadCB2);
             BondedSerialize(from, bondedPayloadSP);
 
-            BondedSerialize(from, bondedPayloadCB as IBonded);
+            BondedSerialize(from, (IBonded)bondedPayloadCB);
+            BondedSerialize(from, (IBonded)bondedPayloadCB2);
         }
 
         // Serialize a class with IBonded<From> field an deserialize into class with non-lazy struct To field.
@@ -137,6 +152,9 @@
         {
             NonLazyDeserialization<From, To>(
                 Util.SerializeCB, Util.DeserializeCB<BondClass<To>>);
+
+            NonLazyDeserialization<From, To>(
+                Util.SerializeCB2, Util.DeserializeCB2<BondClass<To>>);
 
             NonLazyDeserialization<From, To>(
                 Util.SerializeSP, Util.DeserializeSP<BondClass<IBonded<From>>, BondClass<To>>);
@@ -176,6 +194,9 @@
         {
             LazyDeserialization<From, To, CompactBinaryReader<InputStream>>(
                 Util.SerializeCB, Util.DeserializeCB<BondClass<IBonded<To>>>);
+
+            LazyDeserialization<From, To, CompactBinaryReader<InputStream>>(
+                Util.SerializeCB2, Util.DeserializeCB2<BondClass<IBonded<To>>>);
 
             LazyDeserialization<From, To, SimpleBinaryReader<InputStream>>(
                 Util.SerializeSP, Util.DeserializeSP<BondClass<From>, BondClass<IBonded<To>>>);
@@ -221,6 +242,9 @@
         {
             PolymorphicDeserialization<From, Through, To, CompactBinaryReader<InputStream>>(
                 Util.SerializeCB, Util.DeserializeCB<BondClass<IBonded<Through>>>);
+
+            PolymorphicDeserialization<From, Through, To, CompactBinaryReader<InputStream>>(
+                Util.SerializeCB2, Util.DeserializeCB2<BondClass<IBonded<Through>>>);
 
             PolymorphicDeserialization<From, Through, To, SimpleBinaryReader<InputStream>>(
                 Util.SerializeSP, Util.DeserializeSP<BondClass<IBonded<Through>>, BondClass<IBonded<Through>>>);
@@ -271,8 +295,20 @@
                 Util.DeserializeCB<BondClass<To, double>>);
 
             Passthrough<From, Through, To>(
+                Util.SerializeCB2,
+                Util.DeserializeCB2<BondClass<IBonded<Through>, double>>,
+                Util.SerializeCB2,
+                Util.DeserializeCB2<BondClass<To, double>>);
+
+            Passthrough<From, Through, To>(
                 Util.SerializeCB,
                 Util.DeserializeCB<BondClass<IBonded<Through>, double>>,
+                Util.SerializeSP,
+                Util.DeserializeSP<BondClass<IBonded<Through>, double>, BondClass<To, double>>);
+
+            Passthrough<From, Through, To>(
+                Util.SerializeCB2,
+                Util.DeserializeCB2<BondClass<IBonded<Through>, double>>,
                 Util.SerializeSP,
                 Util.DeserializeSP<BondClass<IBonded<Through>, double>, BondClass<To, double>>);
 
@@ -281,6 +317,12 @@
                 Util.DeserializeSP<BondClass<From, double>, BondClass<IBonded<Through>, double>>,
                 Util.SerializeCB,
                 Util.DeserializeCB<BondClass<To, double>>);
+
+            Passthrough<From, Through, To>(
+                Util.SerializeSP,
+                Util.DeserializeSP<BondClass<From, double>, BondClass<IBonded<Through>, double>>,
+                Util.SerializeCB2,
+                Util.DeserializeCB2<BondClass<To, double>>);
 
             Passthrough<From, Through, To>(
                 Util.SerializeSP,
@@ -295,7 +337,7 @@
                 Util.DeserializeXml<BondClass<To, double>>);
         }
 
-        [TestMethod]
+        [Test]
         public void BondedInterface()
         {
             BondedDeserialize<Nested, Derived>();
@@ -303,7 +345,7 @@
             BondedSerialize<Nested, Derived>();
         }
 
-        [TestMethod]
+        [Test]
         public void LazyDeserialize()
         {
             LazyDeserializationAll<BasicTypes, BasicTypes>();
@@ -312,7 +354,7 @@
             LazyDeserializationAll<Derived, DerivedView>();
         }
 
-        [TestMethod]
+        [Test]
         public void NonLazyDeserialize()
         {
             NonLazyDeserializationAll<BasicTypes, BasicTypes>();
@@ -321,7 +363,7 @@
             NonLazyDeserializationAll<Derived, DerivedView>();
         }
 
-        [TestMethod]
+        [Test]
         public void PolymorphicDeserialize()
         {
             PolymorphicDeserializationAll<Derived, Nested, Derived>();
@@ -332,7 +374,7 @@
             PolymorphicDeserializationAll<DerivedView, EmptyBase, Nested>();
         }
 
-        [TestMethod]
+        [Test]
         public void Passthrough()
         {
             PassthroughAll<BasicTypes, BasicTypes, BasicTypes>();
@@ -342,7 +384,7 @@
             PassthroughAll<Derived, EmptyBase, Nested>();
         }
 
-        [TestMethod]
+        [Test]
         public void BondedEquals()
         {
             var obj1 = new StructWithBonded();
@@ -359,7 +401,7 @@
             Assert.IsFalse(Comparer.Equal(obj1, obj2));
         }
 
-        [TestMethod]
+        [Test]
         public void SerializeBonded()
         {
             var obj = new StructWithBonded();
@@ -395,6 +437,16 @@
             Assert.IsTrue(Comparer.Equal(poly0, obj.poly[0].Deserialize<EmptyBase>()));
             Assert.IsTrue(Comparer.Equal(poly1, obj.poly[1].Deserialize()));
             Assert.IsTrue(Comparer.Equal(poly2, obj.poly[2].Deserialize<Derived>()));
+        }
+
+        [Test]
+        public void SerializeBondedCB2Multiple()
+        {
+            var obj = new StructWithBonded();
+
+            var stream = new MemoryStream();
+            stream.SetLength(0);
+            Util.SerializeCB2Multiple(obj, stream, 2);
         }
     }
 }

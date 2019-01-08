@@ -3,10 +3,12 @@
 
 #pragma once
 
-#include <boost/static_assert.hpp>
+#include <bond/core/config.h>
 
-#include "config.h"
+#include "protocol.h"
 #include "schema.h"
+
+#include <boost/static_assert.hpp>
 
 namespace bond
 {
@@ -31,7 +33,9 @@ inline set(X& var, const T& value)
     set_aliased_value(var, value);
 }
 
-}
+
+} // namespace detail
+
 
 template <typename X, typename T>
 inline X cast(const T& value)
@@ -60,7 +64,7 @@ inline Skip(Reader& input)
 }
 
 
-// Skip container for static parser    
+// Skip container for static parser
 template <typename T, typename Reader>
 typename boost::enable_if_c<is_container<T>::value &&
          uses_static_parser<Reader>::value>::type
@@ -85,7 +89,7 @@ inline Skip(Reader& input, const RuntimeSchema& schema)
         }
         case bond::BT_MAP:
         {
-            return SkipMap(key_schema(schema).GetTypeId(), 
+            return SkipMap(key_schema(schema).GetTypeId(),
                 value<void, Reader&>(input, element_schema(schema), false), input);
         }
         case bond::BT_STRUCT:
@@ -113,7 +117,7 @@ typename boost::enable_if_c<is_container<T>::value &&
          !uses_static_parser<Reader>::value>::type
 inline Skip(Reader& input)
 {
-    // Call protocol to skip containers; this allows protocols to implement 
+    // Call protocol to skip containers; this allows protocols to implement
     // more efficient skipping than element-by-element
     input.template Skip<T>();
 }
@@ -179,42 +183,38 @@ public:
           _skip(skip)
     {}
 
-#ifndef BOND_NO_CXX11_RVALUE_REFERENCES
-    value_common(value_common&& rhs)
-        : _input(rhs._input),
+    value_common(value_common&& rhs) BOND_NOEXCEPT_IF(
+        BOND_NOEXCEPT_EXPR(detail::move_data<Reader>(rhs._input)))
+        : _input(detail::move_data<Reader>(rhs._input)),
           _skip(std::move(rhs._skip))
     {
         rhs._skip = false;
     }
-#endif
 
-#ifndef BOND_NO_CXX11_DEFAULTED_FUNCTIONS
     value_common(const value_common& that) = default;
     value_common& operator=(const value_common& that) = default;
-#endif
 
     ~value_common()
     {
         // skip the value if it has not been read
         if (_skip)
-            bond::Skip<T, typename remove_reference<Reader>::type>(_input, std::nothrow);
+            bond::Skip<T, typename std::remove_reference<Reader>::type>(_input, std::nothrow);
     }
 
     void Skip() const
     {
         _skip = false;
-        bond::Skip<T, typename remove_reference<Reader>::type>(_input);
+        bond::Skip<T, typename std::remove_reference<Reader>::type>(_input);
     }
 
     // skip value of non-matching type
-    template <typename X>
-    typename boost::disable_if_c<is_matching<T, X>::value>::type
-    Deserialize(X& /*var*/) const
+    template <typename Protocols = BuiltInProtocols, typename X>
+    void Deserialize(X& /*var*/, typename boost::disable_if<is_matching<T, X> >::type* = nullptr) const
     {
         Skip();
     }
 
-    
+
 protected:
     Reader          _input;
     mutable bool    _skip;
@@ -232,18 +232,16 @@ public:
         : value_common<T, Reader>(input, skip)
     {}
 
-#ifndef BOND_NO_CXX11_RVALUE_REFERENCES
-    value(value&& rhs)
+    value(value&& rhs) BOND_NOEXCEPT_IF((
+        std::is_nothrow_move_constructible<value_common<T, Reader> >::value))
         : value_common<T, Reader>(std::move(rhs))
     {}
-#endif
 
-#ifndef BOND_NO_CXX11_DEFAULTED_FUNCTIONS
     value(const value& that) = default;
     value& operator=(const value& that) = default;
-#endif
 
     /// @brief Deserialize the value
+    template <typename Protocols = BuiltInProtocols>
     void Deserialize(T& var) const
     {
         _skip = false;
@@ -252,29 +250,30 @@ public:
 
 
     // deserialize series of matching values to blob
+    template <typename Protocols = BuiltInProtocols>
     void Deserialize(blob& var, uint32_t size) const
     {
-        BOOST_STATIC_ASSERT((is_same<T, blob::value_type>::value));
+        BOOST_STATIC_ASSERT((std::is_same<T, blob::value_type>::value));
         _skip = false;
         _input.Read(var, size);
     }
-    
-    
+
+
     // deserialize the value and cast it to a variable of a matching non-string type
-    template <typename X>
+    template <typename Protocols = BuiltInProtocols, typename X>
     typename boost::enable_if_c<is_matching_basic<T, X>::value && !is_string_type<T>::value>::type
     Deserialize(X& var) const
     {
-        typename boost::mpl::if_c<is_enum<X>::value && sizeof(X) == sizeof(T), X, T>::type data;
-        
+        typename std::conditional<std::is_enum<X>::value && sizeof(X) == sizeof(T), X, T>::type data;
+
         _skip = false;
         _input.Read(data);
         detail::set(var, data);
     }
 
-    
+
     // deserialize the value to a variable of a matching string type
-    template <typename X>
+    template <typename Protocols = BuiltInProtocols, typename X>
     typename boost::enable_if_c<is_matching_basic<T, X>::value && is_string_type<T>::value>::type
     Deserialize(X& var) const
     {
@@ -291,7 +290,7 @@ protected:
 };
 
 
-// Specialization of value for type alias 
+// Specialization of value for type alias
 template <typename T, typename Reader>
 class value<T, Reader, typename boost::enable_if<is_type_alias<T> >::type>
     : public value_common<T, Reader>
@@ -301,17 +300,15 @@ public:
         : value_common<T, Reader>(input, skip)
     {}
 
-#ifndef BOND_NO_CXX11_RVALUE_REFERENCES
-    value(value&& rhs)
+    value(value&& rhs) BOND_NOEXCEPT_IF((
+        std::is_nothrow_move_constructible<value_common<T, Reader> >::value))
         : value_common<T, Reader>(std::move(rhs))
     {}
-#endif
 
-#ifndef BOND_NO_CXX11_DEFAULTED_FUNCTIONS
     value(const value& that) = default;
     value& operator=(const value& that) = default;
-#endif
 
+    template <typename Protocols = BuiltInProtocols>
     void Deserialize(T& var) const
     {
         typename aliased_type<T>::type value;
@@ -336,32 +333,29 @@ public:
         : value_common<T, Reader>(input, skip)
     {}
 
-#ifndef BOND_NO_CXX11_RVALUE_REFERENCES
-    value(value&& rhs)
+    value(value&& rhs) BOND_NOEXCEPT_IF((
+        std::is_nothrow_move_constructible<value_common<T, Reader> >::value))
         : value_common<T, Reader>(std::move(rhs))
     {}
-#endif
 
-#ifndef BOND_NO_CXX11_DEFAULTED_FUNCTIONS
     value(const value& that) = default;
     value& operator=(const value& that) = default;
-#endif
 
     // deserialize Bond struct into matching variable
-    template <typename X>
+    template <typename Protocols = BuiltInProtocols, typename X>
     typename boost::enable_if<is_bond_type<X> >::type
     Deserialize(X& var) const
     {
         _skip = false;
-        bonded<T, Reader>(_input).Deserialize(var);
+        bonded<T, Reader>(_input).template Deserialize<Protocols>(var);
     }
 
 
-    template <typename Transform>
+    template <typename Protocols = BuiltInProtocols, typename Transform>
     void _Apply(const Transform& transform) const
     {
         _skip = false;
-        Apply(transform, bonded<T, Reader>(_input));
+        Apply<Protocols>(transform, bonded<T, Reader>(_input));
     }
 
 
@@ -383,6 +377,23 @@ public:
 };
 
 
+template <typename Protocols, typename X, typename T1, typename T2, typename Reader>
+inline void DeserializeContainer(X& var, const value<std::pair<T1, T2>, Reader&>&, Reader& input);
+
+template <typename Protocols, typename X, typename T, typename Reader>
+typename boost::disable_if<is_container<X> >::type
+inline DeserializeContainer(X& var, const T& element, Reader& input);
+
+template <typename Protocols, typename X, typename T, typename Reader>
+typename boost::enable_if<is_nested_container<X> >::type
+inline DeserializeContainer(X& var, const T& element, Reader& input);
+
+template <typename Protocols, typename X, typename T, typename Reader>
+typename boost::enable_if<is_basic_container<X> >::type
+inline DeserializeContainer(X& var, const T& element, Reader& input);
+
+
+
 // Specialization of value for containers with compile-time schema
 template <typename T, typename Reader>
 class value<T, Reader, typename boost::enable_if<is_container<T> >::type>
@@ -393,32 +404,29 @@ public:
         : value_common<T, Reader>(input, skip)
     {}
 
-#ifndef BOND_NO_CXX11_RVALUE_REFERENCES
-    value(value&& rhs)
+    value(value&& rhs) BOND_NOEXCEPT_IF((
+        std::is_nothrow_move_constructible<value_common<T, Reader> >::value))
         : value_common<T, Reader>(std::move(rhs))
     {}
-#endif
 
-#ifndef BOND_NO_CXX11_DEFAULTED_FUNCTIONS
     value(const value& that) = default;
     value& operator=(const value& that) = default;
-#endif
-    
+
     // Deserialize container
-    template <typename X>
+    template <typename Protocols = BuiltInProtocols, typename X>
     typename boost::enable_if_c<is_matching_container<T, X>::value>::type
     Deserialize(X& var) const
     {
         _skip = false;
-        DeserializeContainer(var, value<typename element_type<T>::type, Reader>(_input, false), _input);
+        DeserializeContainer<Protocols>(var, value<typename element_type<T>::type, Reader>(_input, false), _input);
     }
 
 
-    template <typename Transform>
+    template <typename Protocols = BuiltInProtocols, typename Transform>
     void _Apply(const Transform& transform) const
     {
         _skip = false;
-        DeserializeContainer(transform, value<typename element_type<T>::type, Reader>(_input, false), _input);
+        DeserializeContainer<Protocols>(transform, value<typename element_type<T>::type, Reader>(_input, false), _input);
     }
 
     using value_common<T, Reader>::Deserialize;
@@ -429,6 +437,18 @@ protected:
     using value_common<T, Reader>::_skip;
 };
 
+
+template <typename Protocols, typename X, typename T, typename Reader>
+typename boost::disable_if<is_container<X> >::type
+inline DeserializeMap(X& var, BondDataType keyType, const T& element, Reader& input);
+
+template <typename Protocols, typename X, typename T, typename Reader>
+typename boost::enable_if<is_nested_container<X> >::type
+inline DeserializeMap(X& var, BondDataType keyType, const T& element, Reader& input);
+
+template <typename Protocols, typename X, typename T, typename Reader>
+typename boost::enable_if<is_basic_container<X> >::type
+inline DeserializeMap(X& var, BondDataType keyType, const T& element, Reader& input);
 
 
 // Specialization of value for data described by runtime schema
@@ -451,21 +471,20 @@ public:
         _schemaDef.root.id = type;
     }
 
-#ifndef BOND_NO_CXX11_RVALUE_REFERENCES
-    value(value&& rhs)
-        : _input(rhs._input),
+    value(value&& rhs) BOND_NOEXCEPT_IF(
+        BOND_NOEXCEPT_EXPR(detail::move_data<Reader>(rhs._input))
+        && std::is_nothrow_move_constructible<SchemaDef>::value
+        && std::is_nothrow_move_constructible<RuntimeSchema>::value)
+        : _input(detail::move_data<Reader>(rhs._input)),
           _schemaDef(std::move(rhs._schemaDef)),
           _schema(std::move(rhs._schema)),
           _skip(std::move(rhs._skip))
     {
         rhs._skip = false;
     }
-#endif
 
-#ifndef BOND_NO_CXX11_DEFAULTED_FUNCTIONS
     value(const value& that) = default;
     value& operator=(const value& that) = default;
-#endif
 
     ~value()
     {
@@ -482,14 +501,14 @@ public:
 
 
     // Deserialize container
-    template <typename X>
+    template <typename Protocols = BuiltInProtocols, typename X>
     typename boost::enable_if_c<is_container<X>::value && !is_map_container<X>::value>::type
     Deserialize(X& var) const
     {
         if (_schema.GetTypeId() == get_type_id<X>::value)
         {
             _skip = false;
-            DeserializeContainer(var, 
+            DeserializeContainer<Protocols>(var,
                 value<void, Reader>(_input, element_schema(_schema), false), _input);
         }
         else
@@ -498,16 +517,16 @@ public:
         }
     }
 
-    
+
     // Deserialize map
-    template <typename X>
+    template <typename Protocols = BuiltInProtocols, typename X>
     typename boost::enable_if<is_map_container<X> >::type
     Deserialize(X& var) const
     {
         if (_schema.GetTypeId() == get_type_id<X>::value)
         {
             _skip = false;
-            DeserializeMap(var, key_schema(_schema).GetTypeId(),
+            DeserializeMap<Protocols>(var, key_schema(_schema).GetTypeId(),
                 value<void, Reader>(_input, element_schema(_schema), false), _input);
         }
         else
@@ -518,14 +537,14 @@ public:
 
 
     // Deserialize Bond struct
-    template <typename X>
+    template <typename Protocols = BuiltInProtocols, typename X>
     typename boost::enable_if<is_bond_type<X> >::type
     Deserialize(X& var) const
     {
         if (_schema.GetTypeId() == get_type_id<X>::value)
         {
             _skip = false;
-            bonded<void, Reader>(_input, _schema).Deserialize(var);
+            bonded<void, Reader>(_input, _schema).template Deserialize<Protocols>(var);
         }
         else
         {
@@ -534,32 +553,32 @@ public:
     }
 
 
-    template <typename Transform>
+    template <typename Protocols = BuiltInProtocols, typename Transform>
     void _Apply(const Transform& transform) const
     {
         _skip = false;
 
         if (_schema.GetTypeId() == bond::BT_STRUCT)
         {
-            Apply(transform, bonded<void, Reader>(_input, _schema));
+            Apply<Protocols>(transform, bonded<void, Reader>(_input, _schema));
         }
         else if(_schema.GetTypeId() == bond::BT_MAP)
         {
-            DeserializeMap(transform, key_schema(_schema).GetTypeId(),
+            DeserializeMap<Protocols>(transform, key_schema(_schema).GetTypeId(),
                 value<void, Reader>(_input, element_schema(_schema), false), _input);
         }
         else
         {
             BOOST_ASSERT(_schema.GetTypeId() == bond::BT_LIST || _schema.GetTypeId() == bond::BT_SET);
 
-            DeserializeContainer(transform, 
+            DeserializeContainer<Protocols>(transform,
                 value<void, Reader>(_input, element_schema(_schema), false), _input);
         }
     }
 
-    
+
     // skip value of non-matching type
-    template <typename X>
+    template <typename Protocols = BuiltInProtocols, typename X>
     typename boost::disable_if_c<is_container<X>::value || is_bond_type<X>::value>::type
     Deserialize(X& /*var*/) const
     {
@@ -567,12 +586,12 @@ public:
     }
 
 
-    BondDataType GetTypeId() const 
+    BondDataType GetTypeId() const
     {
         return _schema.GetTypeId();
     }
 
-    
+
     RuntimeSchema GetRuntimeSchema() const
     {
         return _schema;
@@ -586,107 +605,98 @@ private:
 };
 
 
-// warning C4512: 'bond::DeserializeElement::Deserialize' : assignment operator could not be generated
-#pragma warning(push)
-#pragma warning(disable: 4512)
-
-
-template <typename X, typename I, typename T>
-typename boost::enable_if<require_modify_element<X> >::type 
+template <typename Protocols, typename X, typename I, typename T>
+typename boost::enable_if<require_modify_element<X> >::type
 inline DeserializeElement(X& var, const I& item, const T& element)
 {
-    struct Deserialize
+    struct DeserializeImpl
     {
-        Deserialize(const T& element)
+        DeserializeImpl(const T& element)
             : element(element)
         {}
 
         void operator()(typename element_type<X>::type& e)
         {
-            this->element.Deserialize(e);
+            this->element.template Deserialize<Protocols>(e);
         }
 
         const T& element;
     };
 
-    modify_element(var, item, Deserialize(element));
+    modify_element(var, item, DeserializeImpl(element));
 }
 
 
-template <typename X, typename I, typename T>
-typename boost::disable_if<require_modify_element<X> >::type 
+template <typename Protocols, typename X, typename I, typename T>
+typename boost::disable_if<require_modify_element<X> >::type
 inline DeserializeElement(X&, I& item, const T& element)
 {
-    element.Deserialize(item);
+    element.template Deserialize<Protocols>(item);
 }
-
-#pragma warning(pop)
 
 
 // Read elements of a list
-template <typename X, typename T>
+template <typename Protocols, typename X, typename T>
 typename boost::enable_if_c<is_list_container<X>::value
                          && is_element_matching<T, X>::value>::type
 inline DeserializeElements(X& var, const T& element, uint32_t size)
-{    
+{
     resize_list(var, size);
 
     for (enumerator<X> items(var); items.more();)
-        DeserializeElement(var, items.next(), element);
+        DeserializeElement<Protocols>(var, items.next(), element);
 }
 
 
-template <typename X, typename Allocator, bool useValue, typename T>
+template <typename Protocols, typename X, typename T>
 typename boost::enable_if<is_matching<T, X> >::type
-inline DeserializeElements(nullable<X, Allocator, useValue>& var, const T& element, uint32_t size)
-{    
+inline DeserializeElements(nullable<X>& var, const T& element, uint32_t size)
+{
     resize_list(var, size);
 
-    for (enumerator<nullable<X, Allocator, useValue> > items(var); items.more(); --size)
-        element.Deserialize(items.next());
+    for (enumerator<nullable<X> > items(var); items.more(); --size)
+        element.template Deserialize<Protocols>(items.next());
 
     // Wire representation and interface for nullable is the same as for list.
     // However nullable can "contain" at most one element. If there are more
-    // elements in the payload we skip them. 
-    while (size--)
-        element.Skip();        
+    // elements in the payload we skip them.
+    detail::SkipElements(element, size);
 }
 
 
-template <typename Reader>
+template <typename Protocols, typename Reader>
 inline void DeserializeElements(blob& var, const value<blob::value_type, Reader&>& element, uint32_t size)
-{    
-    element.Deserialize(var, size);
+{
+    element.template Deserialize<Protocols>(var, size);
 }
 
 
-template <typename X, typename T>
+template <typename Protocols, typename X, typename T>
 typename boost::enable_if_c<is_set_container<X>::value
                          && is_element_matching<T, X>::value>::type
 inline DeserializeElements(X& var, const T& element, uint32_t size)
-{    
+{
     clear_set(var);
 
     typename element_type<X>::type e(make_element(var));
 
     while (size--)
     {
-        element.Deserialize(e);
+        element.template Deserialize<Protocols>(e);
         set_insert(var, e);
     }
 }
 
 
-template <typename X, typename T>
+template <typename Protocols, typename X, typename T>
 typename boost::disable_if<is_element_matching<T, X> >::type
 inline DeserializeElements(X&, const T& element, uint32_t size)
-{    
-    while (size--)
-        element.Skip();
+{
+    detail::SkipElements(element, size);
 }
 
 
-template <typename Transform, typename T>
+template <typename Protocols, typename Transform, typename T>
 inline void DeserializeElements(const Transform& transform, const T& element, uint32_t size)
 {
     transform.Container(element, size);
@@ -704,7 +714,7 @@ inline void SkipContainer(const value<std::pair<T1, T2>, Reader&>&, Reader& inpu
 
 template <typename T, typename Reader>
 inline void SkipContainer(const T& element, Reader& input)
-{    
+{
     BOOST_STATIC_ASSERT(uses_static_parser<Reader>::value);
 
     uint32_t size;
@@ -714,26 +724,25 @@ inline void SkipContainer(const T& element, Reader& input)
         input.ReadContainerBegin(size, type);
     }
 
-    while (size--)
-        element.Skip();
+    detail::SkipElements(element, size);
 
     input.ReadContainerEnd();
 }
 
 
-template <typename X, typename T1, typename T2, typename Reader>
+template <typename Protocols, typename X, typename T1, typename T2, typename Reader>
 inline void DeserializeContainer(X& var, const value<std::pair<T1, T2>, Reader&>&, Reader& input)
 {
-    return DeserializeMap(var, get_type_id<T1>::value, value<T2, Reader&>(input, false), input);
+    return DeserializeMap<Protocols>(var, get_type_id<T1>::value, value<T2, Reader&>(input, false), input);
 }
 
 
-template <typename X, typename T, typename Reader>
+template <typename Protocols, typename X, typename T, typename Reader>
 typename boost::disable_if<is_container<X> >::type
 inline DeserializeContainer(X& var, const T& element, Reader& input)
 {
     BondDataType type = GetTypeId(element);
-    uint32_t     size;
+    uint32_t     size = 0;
 
     input.ReadContainerBegin(size, type);
 
@@ -746,26 +755,26 @@ inline DeserializeContainer(X& var, const T& element, Reader& input)
         {
             if (type == GetTypeId(element))
             {
-                DeserializeElements(var, element, size);
+                DeserializeElements<Protocols>(var, element, size);
             }
             else
             {
-                DeserializeElements(var, value<void, Reader&>(input, type, false), size);
+                DeserializeElements<Protocols>(var, value<void, Reader&>(input, type, false), size);
             }
             break;
         }
         default:
         {
-            detail::BasicTypeContainer(var, type, input, size);
+            detail::BasicTypeContainer<Protocols>(var, type, input, size);
             break;
         }
     }
-               
+
     input.ReadContainerEnd();
 }
 
 
-template <typename X, typename T, typename Reader>
+template <typename Protocols, typename X, typename T, typename Reader>
 typename boost::enable_if<is_nested_container<X> >::type
 inline DeserializeContainer(X& var, const T& element, Reader& input)
 {
@@ -776,19 +785,18 @@ inline DeserializeContainer(X& var, const T& element, Reader& input)
 
     if (type == GetTypeId(element))
     {
-        DeserializeElements(var, element, size);
+        DeserializeElements<Protocols>(var, element, size);
     }
     else
     {
-        while (size--)
-            input.Skip(type);
+        detail::SkipElements(type, input, size);
     }
-               
+
     input.ReadContainerEnd();
 }
 
 
-template <typename X, typename T, typename Reader>
+template <typename Protocols, typename X, typename T, typename Reader>
 typename boost::enable_if<is_basic_container<X> >::type
 inline DeserializeContainer(X& var, const T& element, Reader& input)
 {
@@ -806,8 +814,7 @@ inline DeserializeContainer(X& var, const T& element, Reader& input)
         {
             if (type == GetTypeId(element))
             {
-                while (size--)
-                    element.Skip();
+                detail::SkipElements(element, size);
             }
             else
             {
@@ -818,19 +825,19 @@ inline DeserializeContainer(X& var, const T& element, Reader& input)
         }
         default:
         {
-            detail::MatchingTypeContainer(var, type, input, size);
+            detail::MatchingTypeContainer<Protocols>(var, type, input, size);
             break;
         }
     }
-               
+
     input.ReadContainerEnd();
 }
 
 
-template <typename X, typename Key, typename T>
+template <typename Protocols, typename X, typename Key, typename T>
 typename boost::enable_if<is_map_key_matching<Key, X> >::type
 inline DeserializeMapElements(X& var, const Key& key, const T& element, uint32_t size)
-{    
+{
     BOOST_STATIC_ASSERT((is_map_element_matching<T, X>::value));
 
     clear_map(var);
@@ -839,24 +846,24 @@ inline DeserializeMapElements(X& var, const Key& key, const T& element, uint32_t
 
     while (size--)
     {
-        key.Deserialize(k);
+        key.template Deserialize<Protocols>(k);
 
 #ifndef NDEBUG
-        // In debug build To<T> asserts that optional fields are set to default 
-        // values before deserialization; if invalid map payload contains duplicate 
-        // keys the second time we deserialize a value it will trigger the assert. 
-        element.Deserialize(mapped_at(var, k) = make_value(var));
+        // In debug build To<T> asserts that optional fields are set to default
+        // values before deserialization; if invalid map payload contains duplicate
+        // keys the second time we deserialize a value it will trigger the assert.
+        element.template Deserialize<Protocols>(mapped_at(var, k) = make_value(var));
 #else
-        element.Deserialize(mapped_at(var, k));
+        element.template Deserialize<Protocols>(mapped_at(var, k));
 #endif
     }
 }
 
 
-template <typename X, typename Key, typename T>
-typename boost::disable_if<is_map_key_matching<Key, X> >::type  
+template <typename Protocols, typename X, typename Key, typename T>
+typename boost::disable_if<is_map_key_matching<Key, X> >::type
 inline DeserializeMapElements(X&, const Key& key, const T& element, uint32_t size)
-{    
+{
     while (size--)
     {
         key.Skip();
@@ -865,7 +872,7 @@ inline DeserializeMapElements(X&, const Key& key, const T& element, uint32_t siz
 }
 
 
-template <typename Transform, typename Key, typename T>
+template <typename Protocols, typename Transform, typename Key, typename T>
 inline void DeserializeMapElements(const Transform& transform, const Key& key, const T& element, uint32_t size)
 {
     transform.Container(key, element, size);
@@ -885,24 +892,20 @@ inline void SkipMap(BondDataType keyType, const T& element, Reader& input)
         input.ReadContainerBegin(size, type);
     }
 
-    while (size--)
-    {
-        input.Skip(keyType);
-        element.Skip();
-    }
+    detail::SkipElements(keyType, element, input, size);
 
     input.ReadContainerEnd();
 }
 
 
-template <typename X, typename T, typename Reader>
+template <typename Protocols, typename X, typename T, typename Reader>
 typename boost::disable_if<is_container<X> >::type
 inline DeserializeMap(X& var, BondDataType keyType, const T& element, Reader& input)
 {
     std::pair<BondDataType, BondDataType> type(keyType, GetTypeId(element));
-    uint32_t                              size;
+    uint32_t                              size = 0;
 
-    input.ReadContainerBegin(size, type); 
+    input.ReadContainerBegin(size, type);
 
     switch (type.second)
     {
@@ -913,59 +916,55 @@ inline DeserializeMap(X& var, BondDataType keyType, const T& element, Reader& in
         {
             if (type.second == GetTypeId(element))
             {
-                detail::MapByKey(var, type.first, element, input, size);
+                detail::MapByKey<Protocols>(var, type.first, element, input, size);
             }
             else
             {
-                detail::MapByKey(var, type.first, value<void, Reader&>(input, type.second, false), input, size);
+                detail::MapByKey<Protocols>(var, type.first, value<void, Reader&>(input, type.second, false), input, size);
             }
             break;
         }
         default:
         {
-            detail::MapByElement(var, type.first, type.second, input, size);
+            detail::MapByElement<Protocols>(var, type.first, type.second, input, size);
             break;
         }
     }
-               
+
     input.ReadContainerEnd();
 }
 
 
-template <typename X, typename T, typename Reader>
+template <typename Protocols, typename X, typename T, typename Reader>
 typename boost::enable_if<is_nested_container<X> >::type
 inline DeserializeMap(X& var, BondDataType keyType, const T& element, Reader& input)
 {
     std::pair<BondDataType, BondDataType> type(keyType, GetTypeId(element));
     uint32_t                              size;
 
-    input.ReadContainerBegin(size, type); 
+    input.ReadContainerBegin(size, type);
 
     if (type.second == GetTypeId(element))
     {
-        detail::MapByKey(var, type.first, element, input, size);
+        detail::MapByKey<Protocols>(var, type.first, element, input, size);
     }
     else
     {
-        while (size--)
-        {
-            input.Skip(type.first);
-            input.Skip(type.second);
-        }
+        detail::SkipElements(type.first, type.second, input, size);
     }
-               
+
     input.ReadContainerEnd();
 }
 
 
-template <typename X, typename T, typename Reader>
+template <typename Protocols, typename X, typename T, typename Reader>
 typename boost::enable_if<is_basic_container<X> >::type
 inline DeserializeMap(X& var, BondDataType keyType, const T& element, Reader& input)
 {
     std::pair<BondDataType, BondDataType> type(keyType, GetTypeId(element));
     uint32_t                              size;
 
-    input.ReadContainerBegin(size, type); 
+    input.ReadContainerBegin(size, type);
 
     switch (type.second)
     {
@@ -976,11 +975,7 @@ inline DeserializeMap(X& var, BondDataType keyType, const T& element, Reader& in
         {
             if (type.second == GetTypeId(element))
             {
-                while (size--)
-                {
-                    input.Skip(type.first);
-                    element.Skip();
-                }
+                detail::SkipElements(type.first, element, input, size);
             }
             else
             {
@@ -994,13 +989,22 @@ inline DeserializeMap(X& var, BondDataType keyType, const T& element, Reader& in
         }
         default:
         {
-            detail::MatchingMapByElement(var, type.first, type.second, input, size);
+            detail::MatchingMapByElement<Protocols>(var, type.first, type.second, input, size);
             break;
         }
     }
-               
+
     input.ReadContainerEnd();
 }
 
-};
-    
+
+} // namespace bond
+
+
+#ifdef BOND_LIB_TYPE
+#if BOND_LIB_TYPE != BOND_LIB_TYPE_HEADER
+#include "detail/value_extern.h"
+#endif
+#else
+#error BOND_LIB_TYPE is undefined
+#endif

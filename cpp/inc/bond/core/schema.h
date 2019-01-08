@@ -3,12 +3,19 @@
 
 #pragma once
 
+#include <bond/core/config.h>
+
+#include "detail/once.h"
+#include "detail/tags.h"
 #include "reflection.h"
 #include "runtime_schema.h"
-#include "detail/tags.h"
-#include "detail/once.h"
-#include <boost/make_shared.hpp>
+
 #include <boost/bind.hpp>
+#include <boost/make_shared.hpp>
+
+#include <limits>
+#include <algorithm>
+#include <iterator>
 
 namespace bond
 {
@@ -30,7 +37,7 @@ inline RuntimeSchema::RuntimeSchema(const boost::shared_ptr<SchemaDef>& schema)
       type(&schema->root),
       instance(schema)
 {}
-    
+
 inline RuntimeSchema::RuntimeSchema(const RuntimeSchema& schema, const TypeDef& type)
     : schema(schema.schema),
       type(&type),
@@ -52,7 +59,7 @@ inline RuntimeSchema RuntimeSchema::GetBaseSchema() const
 {
     return RuntimeSchema(*this, GetStruct().base_def.value());
 }
-    
+
 inline const StructDef& RuntimeSchema::GetStruct() const
 {
     BOOST_ASSERT(type->id == BT_STRUCT);
@@ -65,17 +72,17 @@ inline BondDataType RuntimeSchema::GetTypeId() const
 }
 
 
-template <typename Writer>
+template <typename Protocols = BuiltInProtocols, typename Writer>
 inline void Serialize(const RuntimeSchema& schema, Writer& output)
 {
-    Apply(SerializeTo(output), schema.GetSchema());
+    Apply<Protocols>(SerializeTo<Protocols>(output), schema.GetSchema());
 }
 
 
-template <typename Writer>
+template <typename Protocols = BuiltInProtocols, typename Writer>
 inline void Marshal(const RuntimeSchema& schema, Writer& output)
 {
-    Apply(MarshalTo(output), schema.GetSchema());
+    Apply<Protocols>(MarshalTo<Protocols>(output), schema.GetSchema());
 }
 
 class InitSchemaDef;
@@ -85,13 +92,13 @@ namespace detail
     inline uint16_t schema_depth(const RuntimeSchema& schema)
     {
         uint16_t depth = 1;
-    
+
         if (schema.HasBase())
             depth += schema_depth(schema.GetBaseSchema());
-    
+
         return depth;
     }
-    
+
     template <typename T, typename Unused = void>
     class SchemaCache
     {
@@ -103,9 +110,9 @@ namespace detail
             // are global static variables, and we can't depends on them being
             // initialized before the schema. Instead we initialize the schema
             // on the first call to Get().
-	    // Note that older versions of GNU C++ don't handle rvalue argument
-	    // forwarding in Boost call_once implementation so we are using
-	    // the old trusty boost::bind. 
+            // Note that older versions of GNU C++ don't handle rvalue argument
+            // forwarding in Boost call_once implementation so we are using
+            // the old trusty boost::bind.
             call_once(flag, boost::bind(&AppendStructDef, &schema));
             return schema;
         }
@@ -133,10 +140,10 @@ namespace detail
         static SchemaDef NewSchemaDef()
         {
             // SchemaDef for unknown types: struct with no fields
-            SchemaDef schema;
-            schema.root.id = BT_STRUCT;
-            schema.structs.resize(1);
-            return schema;
+            SchemaDef s;
+            s.root.id = BT_STRUCT;
+            s.structs.resize(1);
+            return s;
         }
 
     private:
@@ -169,7 +176,7 @@ public:
         _schema.structs.push_back(StructDef());
     }
 
-    
+
     void Begin(const Metadata& metadata) const
     {
         This().metadata = metadata;
@@ -178,7 +185,7 @@ public:
     void End() const
     {
     }
-    
+
     template <typename T>
     bool Base(const T& /*value*/) const
     {
@@ -213,7 +220,7 @@ private:
         return type;
     }
 
-    
+
     template <typename T>
     typename boost::enable_if_c<is_container<T>::value && !is_map_container<T>::value, TypeDef>::type
     GetTypeDef() const
@@ -226,7 +233,7 @@ private:
         return type;
     }
 
-    
+
     template <typename T>
     typename boost::enable_if<is_map_container<T>, TypeDef>::type
     GetTypeDef() const
@@ -240,37 +247,47 @@ private:
         return type;
     }
 
-    
+
     template <typename T>
     typename boost::enable_if<is_bond_type<T>, TypeDef>::type
     GetTypeDef() const
     {
         TypeDef type;
-        
+
         type.id = get_type_id<T>::value;
         type.struct_def = GetStructDef<typename remove_bonded<T>::type>();
         type.bonded_type = is_bonded<T>::value;
-        
+
         return type;
     }
 
-    
+
     template <typename T>
     uint16_t GetStructDef() const
     {
-        size_t n;
+        const auto& structs = _schema.structs;
 
-        for (n = 0; n < _schema.structs.size(); ++n)
-            if (_schema.structs[n].metadata.qualified_name == schema<T>::type::metadata.qualified_name)
-                return static_cast<uint16_t>(n);
+        BOOST_ASSERT(structs.size() <= (std::numeric_limits<uint16_t>::max)());
 
-        detail::SchemaCache<T>::AppendStructDef(&_schema);
+        auto it = std::find_if(
+            std::begin(structs),
+            std::end(structs),
+            [](const StructDef& def)
+            {
+                return def.metadata.qualified_name == schema<T>::type::metadata.qualified_name;
+            });
 
-        BOOST_ASSERT(n == static_cast<uint16_t>(n));
-        return static_cast<uint16_t>(n);
+        const auto index = static_cast<uint16_t>(std::distance(std::begin(structs), it));
+
+        if (it == std::end(structs))
+        {
+            detail::SchemaCache<T>::AppendStructDef(&_schema);
+        }
+
+        return index;
     }
 
-    
+
     // Note that This() returns a reference to StructDef in the structs vector
     // which may be invalidated when the vector grows. In particular This()
     // can't be used in an expression that may result in adding items to the
@@ -298,8 +315,9 @@ void SchemaCache<T, Unused>::AppendStructDef(SchemaDef* s)
     // need to support stateful allocators that can't allocate from
     // a default-constructed instance and containers which allocate in
     // default constructor.
-    char o;
-    Apply(InitSchemaDef(*s), reinterpret_cast<const T&>(o));
+    //
+    // Thus, we make a dummy const T& from a nullptr.
+    Apply(InitSchemaDef(*s), static_cast<const T&>(*static_cast<T*>(0)));
 }
 
 } // detail
@@ -336,8 +354,10 @@ inline RuntimeSchema key_schema(const RuntimeSchema& schema)
 }
 
 
+#if defined(_MSC_VER) && (_MSC_VER < 1900)
+
 /// @brief Returns a const reference to a map of values for a user defined enum
-template<typename T>
+template <typename T>
 inline const std::map<T, std::string>& GetEnumValues()
 {
     return GetValueToNameMap(T());
@@ -345,11 +365,29 @@ inline const std::map<T, std::string>& GetEnumValues()
 
 
 /// @brief Returns a const reference to a map of names for a user defined enum
-template<typename T>
+template <typename T>
 inline const std::map<std::string, T>& GetEnumNames()
 {
     return GetNameToValueMap(T());
 }
 
+#else
 
-}; // namespace bond
+/// @brief Returns a const reference to a map of values for a user defined enum
+template <typename T, typename Map = std::map<T, std::string> >
+inline const Map& GetEnumValues()
+{
+    return GetValueToNameMap(T{}, detail::mpl::identity<Map>{});
+}
+
+
+/// @brief Returns a const reference to a map of names for a user defined enum
+template <typename T, typename Map = std::map<std::string, T> >
+inline const Map& GetEnumNames()
+{
+    return GetNameToValueMap(T{}, detail::mpl::identity<Map>{});
+}
+
+#endif
+
+} // namespace bond

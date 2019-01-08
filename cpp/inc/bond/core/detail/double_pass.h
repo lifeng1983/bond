@@ -3,31 +3,34 @@
 
 #pragma once
 
+#include <bond/core/config.h>
+
 namespace bond
 {
     namespace detail
     {
-        template <typename Transform, typename Enable = void> struct 
+        template <typename Transform, typename Enable = void> struct
         need_double_pass
-            : false_type {};
+            : std::false_type {};
 
-        template <typename Transform> struct 
+        template <typename Transform> struct
         need_double_pass<
-            Transform, 
-            typename boost::enable_if_c<!is_same<typename Transform::writer_type, 
+            Transform,
+            typename boost::enable_if_c<!std::is_same<typename Transform::writer_type,
                                                  typename Transform::writer_type::Pass0>::value>::type
-        > : true_type {};
+        > : std::true_type {};
 
-        template <typename Transform, typename T>
+        template <typename Protocols, typename Transform, typename T>
         inline bool DoublePassApply(const Transform& transform, const T& value)
         {
             typedef typename Transform::writer_type Writer;
+            typedef Serializer<Writer, Protocols> Serializer;
 
             typename Writer::Pass0::Buffer output;
-            typename Writer::Pass0 pass0(output, transform.Serializer<Writer>::_output);
+            typename Writer::Pass0 pass0(output, transform.Serializer::_output);
 
-            Apply(transform.Rebind(pass0), value);
-            return transform.Serializer<Writer>::_output.WithPass0(pass0), Apply(transform, value);
+            Apply<Protocols>(transform.Rebind(pass0), value);
+            return transform.Serializer::_output.WithPass0(pass0), Apply<Protocols>(transform, value);
         }
 
     } // namespace detail

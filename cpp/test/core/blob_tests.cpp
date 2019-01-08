@@ -33,12 +33,86 @@ TEST_CASE_BEGIN(LargeBlob)
 }
 TEST_CASE_END
 
+void check_blob_is_empty(const bond::blob& b)
+{
+    // workaround: old compilers won't let us print nullptr, while new ones won't
+    // compare nullptrs to ints
+
+    void* null = 0;
+    UT_AssertAreEqual(b.data(), null);
+    UT_AssertAreEqual(b.size(), 0u);
+    UT_AssertAreEqual(b.content(), null);
+    UT_AssertIsTrue(b.empty());
+}
+
+TEST_CASE_BEGIN(BlobMoveAssign)
+{
+    using bond::blob;
+
+    const uint32_t size = 32;
+
+    // move default-constructed blob
+    {
+        auto data = boost::make_shared<std::array<char,size>>();
+        blob a{data, size};
+        blob b;
+
+        UT_AssertAreEqual(data.use_count(), 2);
+
+        a = std::move(b);
+        
+        check_blob_is_empty(a);
+        check_blob_is_empty(b);
+
+        UT_AssertAreEqual(data.use_count(), 1);
+    }
+    // move from instance with shared ptr
+    {
+        // move from other instance
+        auto data = boost::make_shared<std::array<char, size>>();
+        blob a;
+        blob b{data, size};
+
+        UT_AssertAreEqual(data.use_count(), 2);
+
+        a = std::move(b);
+
+        UT_AssertAreEqual(a.data(), data.get());
+        UT_AssertAreEqual(a.size(), size);
+
+        check_blob_is_empty(b);
+
+        UT_AssertAreEqual(data.use_count(), 2);
+    }
+    // move from raw memory
+    {
+        std::array<char, size> p1;
+        std::array<char, size> p2;
+        blob a{&p1, size};
+        blob b{&p2, size};
+        blob c;
+
+        a = std::move(b);
+        UT_AssertAreEqual(a.data(), &p2);
+        UT_AssertAreEqual(a.size(), size);
+
+        check_blob_is_empty(b);
+
+        // move to empty blob
+        c = std::move(a);
+        UT_AssertAreEqual(c.data(), &p2);
+        UT_AssertAreEqual(c.size(), size);
+
+        check_blob_is_empty(a);
+    }
+}
+TEST_CASE_END
 
 template <typename Reader, typename Writer>
 TEST_CASE_BEGIN(OutputBufferBlobs)
 {
     Blobs blobs = InitRandom<Blobs>();
-    
+
     {
         // chain all blobs (minimum size 0 bytes)
         bond::OutputBuffer stream(1000, 1, std::allocator<char>(), 0);
@@ -47,11 +121,20 @@ TEST_CASE_BEGIN(OutputBufferBlobs)
         Serialize(blobs, writer);
         std::vector<bond::blob> buffers;
         stream.GetBuffers(buffers);
-        
+
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4127) // conditional expression is constant
+#endif // _MSC_VER
+
         if (Reader::magic == bond::SIMPLE_JSON_PROTOCOL)
-            UT_AssertAreEqual(1, buffers.size());
+            UT_AssertAreEqual(std::size_t(1), buffers.size());
         else
             UT_AssertAreEqual(blobs.blobs.size() * 2 + 1, buffers.size());
+
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif // _MSC_VER
     }
 
     {
@@ -62,7 +145,7 @@ TEST_CASE_BEGIN(OutputBufferBlobs)
         Serialize(blobs, writer);
         std::vector<bond::blob> buffers;
         stream.GetBuffers(buffers);
-        UT_AssertAreEqual(buffers.size(), 1);
+        UT_AssertAreEqual(buffers.size(), std::size_t(1));
     }
 
     {
@@ -73,7 +156,7 @@ TEST_CASE_BEGIN(OutputBufferBlobs)
         Serialize(blobs, writer);
         std::vector<bond::blob> buffers;
         stream.GetBuffers(buffers);
-        UT_AssertAreEqual(buffers.size(), 1);
+        UT_AssertAreEqual(buffers.size(), std::size_t(1));
     }
 }
 TEST_CASE_END
@@ -84,26 +167,27 @@ void BlobTests(const char* name)
 {
     UnitTestSuite suite(name);
 
-    AddTestCase<TEST_ID(N), 
+    AddTestCase<TEST_ID(N),
         AllBindingAndMapping1, Reader, Writer, BondStruct<bond::blob> >(suite, "blob deserialization");
 
-#ifndef UNIT_TEST_SUBSET
     AddTestCase<TEST_ID(N),
         AllBindingAndMapping2, Reader, Writer, BondStruct<bond::blob>, BondStruct<std::vector<int8_t> > >(suite, "blob-vector interop");
 
-    AddTestCase<TEST_ID(N), 
+    AddTestCase<TEST_ID(N),
         AllBindingAndMapping2, Reader, Writer, BondStruct<std::vector<int8_t> >, BondStruct<bond::blob> >(suite, "vector-blob interop");
 
-    AddTestCase<TEST_ID(N), 
+    AddTestCase<TEST_ID(N),
         LargeBlob, Reader, Writer>(suite, "large blob");
 
-    AddTestCase<TEST_ID(N), 
+    AddTestCase<TEST_ID(N),
         OutputBufferBlobs, Reader, Writer>(suite, "OutputBuffer blobs");
-#endif
+
+    AddTestCase<TEST_ID(N),
+        BlobMoveAssign>(suite, "BlobMoveAssign");
 }
 
 
-void SerializationTest::BlobTestsInit()
+void BlobTestsInit()
 {
     TEST_SIMPLE_PROTOCOL(
         BlobTests<
@@ -132,4 +216,10 @@ void SerializationTest::BlobTestsInit()
             bond::SimpleJsonReader<bond::InputBuffer>,
             bond::SimpleJsonWriter<bond::OutputBuffer> >("Blob tests for Simple JSON");
     );
+}
+
+bool init_unit_test()
+{
+    BlobTestsInit();
+    return true;
 }

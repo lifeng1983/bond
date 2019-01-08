@@ -5,7 +5,9 @@ namespace Bond
 {
     using System;
     using System.Linq.Expressions;
+    using System.Reflection;
     using Bond.Expressions;
+    using Bond.Internal.Reflection;
 
     /// <summary>
     /// Generic object factory
@@ -37,7 +39,7 @@ namespace Bond
                 else if (typeof(T).IsBonded())
                 {
                     create = Expression.Field(null, 
-                        typeof(Bonded<>).MakeGenericType(typeof(T).GetValueType()).GetField("Empty"));
+                        typeof(Bonded<>).MakeGenericType(typeof(T).GetValueType()).GetTypeInfo().GetDeclaredField("Empty"));
                 }
                 else if (typeof(T).IsClass())
                 {

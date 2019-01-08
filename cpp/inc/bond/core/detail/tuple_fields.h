@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <bond/core/config.h>
+
 namespace bond
 {
 namespace detail
@@ -12,30 +14,32 @@ template <typename Tuple, uint16_t Id, typename T>
 struct tuple_field
 {
     typedef Tuple struct_type;
-    typedef typename remove_reference<T>::type value_type;
+    typedef typename std::remove_reference<T>::type value_type;
     typedef typename remove_maybe<value_type>::type field_type;
     typedef reflection::optional_field_modifier field_modifier;
 
     static const Metadata metadata;
-    static const uint16_t id = Id;
+    BOND_STATIC_CONSTEXPR uint16_t id = Id;
 
-    static const T& GetVariable(const struct_type& obj)
+    static BOND_CONSTEXPR const value_type& GetVariable(const struct_type& obj)
     {
         return std::get<id>(obj);
     }
 
-    static T& GetVariable(struct_type& obj)
+    static BOND_CONSTEXPR value_type& GetVariable(struct_type& obj)
     {
         return std::get<id>(obj);
     }
 
     static Metadata GetMetadata()
     {
-        Metadata metadata;
-        metadata.name = "item" + std::to_string(id);
-        return metadata;
+        Metadata m;
+        m.name = "item" + std::to_string(id);
+        return m;
     }
 };
+
+using ignore_t = decltype(std::ignore);
 
 template <typename Tuple, uint16_t t_id, typename T>
 const Metadata tuple_field<Tuple, t_id, T>::metadata
@@ -55,7 +59,7 @@ tuple_fields<Tuple, id, T, Rest...>
 };
 
 template <typename Tuple, uint16_t id, typename ...Rest> struct
-tuple_fields<Tuple, id, const decltype(std::ignore)&, Rest...>
+tuple_fields<Tuple, id, const ignore_t&, Rest...>
     : tuple_fields<Tuple, id + 1, Rest...>
 {};
 
@@ -79,7 +83,7 @@ param_list<T, Rest...>
 };
 
 template <typename ...Rest> struct
-param_list<const decltype(std::ignore)&, Rest...>
+param_list<const ignore_t&, Rest...>
     : param_list<Rest...>
 {};
 

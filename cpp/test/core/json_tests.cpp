@@ -1,7 +1,12 @@
 #include "precompiled.h"
 #include "json_tests.h"
+
+#include <boost/format.hpp>
+#include <boost/static_assert.hpp>
+
 #include <locale>
 #include <stdarg.h>
+#include <type_traits>
 
 using namespace bond;
 
@@ -48,29 +53,33 @@ template <typename T, typename Reader, typename Writer>
 TEST_CASE_BEGIN(StreamDeserializationTest)
 {
     const int count = 10;
-
     T from[count];
-    
-    // Serialize random objects
-    typename Writer::Buffer output;
-    Writer writer(output);
 
-    for (int i = count; i--;)
+    typename Writer::Buffer output;
+
+    // Serialize random objects
     {
-        from[i] = InitRandom<T>();
-        Serialize(from[i], writer);
+        Writer writer(output);
+
+        for (int i = count; i--;)
+        {
+            from[i] = InitRandom<T>();
+            Serialize(from[i], writer);
+        }
     }
 
     // Deserialize the objects
-    Reader reader(output.GetBuffer());
-    bond::bonded<T, Reader&> stream(reader);
-    
-    for (int i = count; i--;)
     {
-        T record = InitRandom<T>();
-    
-        stream.Deserialize(record);
-        UT_AssertIsTrue(Equal(from[i], record));
+        Reader reader(output.GetBuffer());
+        bond::bonded<T, Reader&> stream(reader);
+
+        for (int i = count; i--;)
+        {
+            T record = InitRandom<T>();
+
+            stream.Deserialize(record);
+            UT_Equal(from[i], record);
+        }
     }
 
     // Deserialize the first object twice
@@ -82,14 +91,14 @@ TEST_CASE_BEGIN(StreamDeserializationTest)
         r2 = InitRandom<T>();
         Deserialize(reader, r1);
         Deserialize(reader, r2);
-        UT_AssertIsTrue(Equal(r1, r2));
-    
+        UT_Equal(r1, r2);
+
         bond::bonded<T> bonded(reader);
         r1 = InitRandom<T>();
         r2 = InitRandom<T>();
         bonded.Deserialize(r1);
         bonded.Deserialize(r2);
-        UT_AssertIsTrue(Equal(r1, r2));
+        UT_Equal(r1, r2);
     }
 }
 TEST_CASE_END
@@ -101,7 +110,7 @@ void StreamTranscoding(uint16_t version = bond::v1)
     const int count = 10;
 
     Record records[count];
-    
+
     // Serialize random objects using protocol 1
     typename Writer1::Buffer output1;
     Writer1 writer1(output1);
@@ -125,17 +134,17 @@ void StreamTranscoding(uint16_t version = bond::v1)
         bond::bonded<Intermediate, Reader1&>(reader1).Deserialize(record);
         Serialize(record, writer2);
     }
-    
+
     // Deserialize the objects from protocol 2
     Reader2 reader2(output2.GetBuffer(), version);
     bond::bonded<Record, Reader2&> stream(reader2);
-    
+
     for (int i = count; i--;)
     {
         Record record = InitRandom<Record>();
-    
+
         stream.Deserialize(record);
-        UT_AssertIsTrue(Equal(records[i], record));
+        UT_Equal(records[i], record);
     }
 }
 
@@ -146,61 +155,113 @@ TEST_CASE_BEGIN(StreamTranscodingTest)
     StreamTranscoding<
         StructWithBase,
         SimpleStruct,
-        Reader, 
-        Writer, 
-        bond::CompactBinaryReader<bond::InputBuffer>, 
+        Reader,
+        Writer,
+        bond::CompactBinaryReader<bond::InputBuffer>,
         bond::CompactBinaryWriter<bond::OutputBuffer>
     >(bond::v1);
 
     StreamTranscoding<
         StructWithBase,
         SimpleStruct,
-        Reader, 
-        Writer, 
-        bond::CompactBinaryReader<bond::InputBuffer>, 
+        Reader,
+        Writer,
+        bond::CompactBinaryReader<bond::InputBuffer>,
         bond::CompactBinaryWriter<bond::OutputBuffer>
     >(bond::v2);
 
     StreamTranscoding<
         NestedStruct,
         NestedStructBondedView,
-        Reader, 
-        Writer, 
-        bond::CompactBinaryReader<bond::InputBuffer>, 
+        Reader,
+        Writer,
+        bond::CompactBinaryReader<bond::InputBuffer>,
         bond::CompactBinaryWriter<bond::OutputBuffer>
     >(bond::v1);
 
     StreamTranscoding<
         NestedStruct,
         NestedStructBondedView,
-        Reader, 
-        Writer, 
-        bond::CompactBinaryReader<bond::InputBuffer>, 
+        Reader,
+        Writer,
+        bond::CompactBinaryReader<bond::InputBuffer>,
         bond::CompactBinaryWriter<bond::OutputBuffer>
     >(bond::v2);
 }
 TEST_CASE_END
-        
+
 
 template <uint16_t N, typename Reader, typename Writer>
-void StringTests(const char* name)
+void StringTests(UnitTestSuite& suite)
 {
-    UnitTestSuite suite(name);
+    BOOST_STATIC_ASSERT(std::is_copy_constructible<Reader>::value);
+    BOOST_STATIC_ASSERT(std::is_move_constructible<Reader>::value);
+    BOOST_STATIC_ASSERT(std::is_copy_assignable<Reader>::value);
+    BOOST_STATIC_ASSERT(std::is_move_assignable<Reader>::value);
 
-    AddTestCase<TEST_ID(N), 
+    AddTestCase<TEST_ID(N),
         StringRoundtripTest, Reader, Writer>(suite, "Roundtrip string/wstring");
 
-    AddTestCase<TEST_ID(N), 
+    AddTestCase<TEST_ID(N),
         StreamDeserializationTest, NestedStruct, Reader, Writer>(suite, "Stream deserialization test");
 }
 
+TEST_CASE_BEGIN(ReaderOverCStr)
+{
+    using Reader = bond::SimpleJsonReader<const char*>;
+
+    BOOST_STATIC_ASSERT(std::is_copy_constructible<Reader>::value);
+    BOOST_STATIC_ASSERT(std::is_move_constructible<Reader>::value);
+    BOOST_STATIC_ASSERT(std::is_copy_assignable<Reader>::value);
+    BOOST_STATIC_ASSERT(std::is_move_assignable<Reader>::value);
+
+    const char* literalJson = "{ \"m_str\": \"specialized for const char*\" }";
+
+    Reader json_reader(literalJson);
+    SimpleStruct to;
+    bond::Deserialize(json_reader, to);
+
+    BOOST_CHECK_EQUAL("specialized for const char*", to.m_str);
+}
+TEST_CASE_END
+
+TEST_CASE_BEGIN(DeepNesting)
+{
+    const size_t nestingDepth = 10000;
+
+    std::string listOpens(nestingDepth, '[');
+    std::string listCloses(nestingDepth, ']');
+
+    std::string deeplyNestedList = boost::str(
+        boost::format("{\"deeplyNestedList\": %strue%s}") % listOpens % listCloses);
+
+    bond::SimpleJsonReader<const char*> json_reader(deeplyNestedList.c_str());
+
+    // The type here doesn't really matter. We need something with no
+    // required fields, as we're really just testing that we can parse a
+    // deeply nested JSON array without crashing.
+    SimpleStruct to;
+    bond::Deserialize(json_reader, to);
+}
+TEST_CASE_END
 
 void JSONTest::Initialize()
 {
+    UnitTestSuite suite("Simple JSON test");
+
     TEST_SIMPLE_JSON_PROTOCOL(
         StringTests<
             0x1c04,
             bond::SimpleJsonReader<bond::InputBuffer>,
-            bond::SimpleJsonWriter<bond::OutputBuffer> >("Simple JSON test");
+            bond::SimpleJsonWriter<bond::OutputBuffer> >(suite);
     );
+
+    AddTestCase<TEST_ID(0x1c05), DeepNesting>(suite, "Deeply nested JSON struct");
+    AddTestCase<TEST_ID(0x1c06), ReaderOverCStr>(suite, "SimpleJsonReader<const char*> specialization");
+}
+
+bool init_unit_test()
+{
+    JSONTest::Initialize();
+    return true;
 }

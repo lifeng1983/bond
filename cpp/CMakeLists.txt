@@ -1,20 +1,29 @@
-set (sources
-    ${BOND_INCLUDE}/bond/core/bond.bond
-    ${BOND_INCLUDE}/bond/core/bond_const.bond)
+set (core_schemas
+    ${BOND_IDL}/bond/core/bond.bond
+    ${BOND_IDL}/bond/core/bond_const.bond)
 
-add_bond_codegen (${sources}
+set (schemas)
+list (APPEND schemas ${core-schemas})
+
+if (BOND_ENABLE_GRPC)
+    set(grpc-flag GRPC)
+endif()
+
+add_bond_codegen (${core_schemas}
     ENUM_HEADER
+    ${grpc-flag}
     OUTPUT_DIR ${BOND_GENERATED}/bond/core)
 
-# Generate again into intermediate dir so that we can build libraries 
+# Generate again into intermediate dir so that we can build libraries
 # concurrently.
 # Despite what documentation says, there doesn't seem to be a way to build
 # multiple targets from one set of generated files without serializing them.
 # Even when using add_custom_target to define an intermediate target the custom
 # command rules are added to each target and VS forces execution of all rules
 # in a clean build, leading to collisions in multi-processor build.
-add_bond_codegen (${sources}
+add_bond_codegen (${core_schemas}
     ENUM_HEADER
+    ${grpc-flag}
     OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_CFG_INTDIR}/bond/core)
 
 file (GLOB core_headers "inc/bond/core/*.h")
@@ -32,21 +41,53 @@ source_group ("protocol\\detail" FILES ${protocol_detail_headers})
 file (GLOB stream_headers "inc/bond/stream/*.h")
 source_group ("stream" FILES ${stream_headers})
 
-set (generated_files 
-    ${BOND_GENERATED}/bond/core/bond_types.cpp 
+set (generated_files_types)
+list (APPEND generated_files_types
+    ${BOND_GENERATED}/bond/core/bond_types.cpp
     ${BOND_GENERATED}/bond/core/bond_const_types.cpp)
 
-source_group ("generated" FILES ${generated_files})
+set (generated_files_apply)
+list (APPEND generated_files_apply
+    ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_CFG_INTDIR}/bond/core/bond_apply.cpp)
 
-add_library (bond
-    STATIC
-    ${sources}
-    ${generated_files}
+set (precompiled_sources)
+list (APPEND precompiled_sources
+    "src/bond/core/detail/typeid_value.cpp"
+    "src/bond/core/parser.cpp"
+    "src/bond/core/select_protocol.cpp"
+    "src/bond/core/value.cpp"
+    "src/bond/protocol/detail/rapidjson_utils.cpp")
+
+list (APPEND headers
     ${core_headers}
     ${core_detail_headers}
     ${protocol_headers}
     ${protocol_detail_headers}
     ${stream_headers})
+
+# grpc-specific headers
+if (BOND_ENABLE_GRPC)
+    file (GLOB ext_grpc_headers "inc/bond/ext/grpc/*.h")
+    source_group ("ext\\grpc" FILES ${ext_grpc_headers})
+
+    file (GLOB ext_grpc_detail_headers "inc/bond/ext/grpc/detail/*.h")
+    source_group ("ext\\grpc\\detail" FILES ${ext_grpc_detail_headers})
+
+    list (APPEND headers
+        ${ext_grpc_headers}
+        ${ext_grpc_detail_headers})
+endif()
+
+source_group ("generated" FILES ${generated_files_types} ${generated_files_apply})
+
+add_library (bond
+    STATIC
+    ${schemas}
+    ${generated_files_types}
+    ${precompiled_sources}
+    ${headers})
+
+target_compile_definitions (bond PUBLIC -DBOND_LIB_TYPE=BOND_LIB_TYPE_STATIC)
 
 # Boost thread is only needed if the C++ standard library doesn't support
 # std::call_once. However std::once seems problematic on Linux
@@ -60,10 +101,10 @@ endif()
 
 add_library (bond_apply
     STATIC
-    ${sources}
-    ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_CFG_INTDIR}/bond/core/bond_apply.cpp
-    ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_CFG_INTDIR}/bond/core/bond_const_apply.cpp)
+    ${schemas}
+    ${generated_files_apply})
 
+target_link_libraries (bond_apply bond)
 target_include_directories (bond_apply BEFORE PRIVATE
     ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_CFG_INTDIR})
 
@@ -71,5 +112,19 @@ install (TARGETS bond bond_apply
     EXPORT bond
     ARCHIVE DESTINATION lib/bond
     INCLUDES DESTINATION include)
+
+install (DIRECTORY ${BOND_IDL}/bond/core DESTINATION include/bond)
+
+if (BOND_LIBRARIES_INSTALL_CPP)
+  install (
+    DIRECTORY ${BOND_GENERATED}/bond/
+    DESTINATION src/bond/generated
+    FILES_MATCHING PATTERN "*.cpp")
+
+  install (
+    DIRECTORY ${BOND_SOURCE_DIR}/
+    DESTINATION src/
+    FILES_MATCHING PATTERN "*.cpp")
+endif()
 
 add_subdirectory (test)

@@ -3,8 +3,15 @@
 
 #pragma once
 
-#include <bond/core/containers.h>
+#include <bond/core/config.h>
+
 #include <bond/core/blob.h>
+#include <bond/core/containers.h>
+#include <bond/core/traits.h>
+
+#include <boost/static_assert.hpp>
+
+#include <cstring>
 
 namespace bond
 {
@@ -14,13 +21,13 @@ class RandomProtocolEngine
 {
 public:
     // We don't need a good pseudo-random number generator but we do need one
-    // that is consistent accross compilers/libraries so that we can use 
+    // that is consistent accross compilers/libraries so that we can use
     // randomly generated data files from one platfom to verify compatibility
     // on another platform.
     RandomProtocolEngine()
     {}
 
-    // Variant of Marsaglia’s xorshift generator
+    // Variant of Marsaglia's xorshift generator
     // http://arxiv.org/pdf/1404.0390v1.pdf
     uint64_t Next()
     {
@@ -46,11 +53,11 @@ template <typename T>
 uint64_t RandomProtocolEngine<T>::state[2] = {seed1, seed2};
 
 //
-// Protocol which generates a random stream of bits. 
+// Protocol which generates a random stream of bits.
 // In some cases it may be useful for initializing data in tests, e.g.:
 //
 // Params param;
-// Apply(bond::To<Params>(param), bond::bonded<Params>(bond::RandomProtocolReader())); 
+// Apply(bond::To<Params>(param), bond::bonded<Params>(bond::RandomProtocolReader()));
 //
 class RandomProtocolReader
     : public RandomProtocolEngine<RandomProtocolReader>
@@ -59,7 +66,7 @@ public:
     typedef bond::StaticParser<RandomProtocolReader&> Parser;
 
     RandomProtocolReader(uint32_t max_string_length = 50, uint32_t max_list_size = 20, bool json = false)
-        : _max_string_length(max_string_length), 
+        : _max_string_length(max_string_length),
           _max_list_size(max_list_size),
           _json(json)
     {}
@@ -76,11 +83,14 @@ public:
 
     template <typename T>
     typename boost::disable_if<is_string_type<T> >::type
-    Read(T& value) 
+    Read(T& value)
     {
-        uint64_t random = RandomProtocolEngine::Next();
+        BOOST_STATIC_ASSERT(std::is_trivially_copyable<T>::value);
+        // We only have 64 bits of randomness, so T needs to fit in that.
+        BOOST_STATIC_ASSERT(sizeof(T) <= sizeof(uint64_t));
 
-        value = *static_cast<T*>(static_cast<void*>(&random));
+        uint64_t random = RandomProtocolEngine::Next();
+        std::memcpy(&value, &random, sizeof(T));
     }
 
     void Read(uint64_t& value)
@@ -104,6 +114,8 @@ public:
 
     void Read(double& value)
     {
+        BOOST_STATIC_ASSERT(sizeof(double) == sizeof(uint64_t));
+
         uint8_t sign;
         uint8_t exponent;
         uint32_t mantissa;
@@ -117,12 +129,13 @@ public:
             exponent = 0x80;
 
         uint64_t bits = ((uint64_t)(sign) << 63) | ((uint64_t)(exponent) << (52 + 3)) | (uint64_t)mantissa;
-
-        *reinterpret_cast<uint64_t*>(&value) = bits;
+        std::memcpy(&value, &bits, sizeof(bits));
     }
 
     void Read(float& value)
     {
+        BOOST_STATIC_ASSERT(sizeof(float) == sizeof(uint32_t));
+
         uint8_t sign;
         uint8_t exponent;
         uint16_t mantissa;
@@ -136,8 +149,7 @@ public:
             exponent = 0x80;
 
         uint32_t bits = ((uint32_t)(sign) << 31) | ((uint32_t)(exponent) << 23) | (uint32_t)mantissa;
-
-        *reinterpret_cast<uint32_t*>(&value) = bits;
+        std::memcpy(&value, &bits, sizeof(bits));
     }
 
     template <typename T>
@@ -145,7 +157,7 @@ public:
     Read(T& value)
     {
         uint32_t length = 0;
-        
+
         Read(length);
 
         length %= _max_string_length;
@@ -154,24 +166,29 @@ public:
         resize_string(value, length);
 
         typename element_type<T>::type* p = string_data(value);
+        typename element_type<T>::type* const p_end = p + length;
 
-        for (unsigned i = 0; i < length; ++i)
+        for (; p != p_end; ++p)
         {
             uint8_t c;
 
             Read(c);
 
-            p[i] = typename element_type<T>::type(' ') + c % ('z' - ' ');
+            *p = typename element_type<T>::type(' ') + c % ('z' - ' ');
         }
     }
 
     // Read for blob
     void Read(blob& value, uint32_t size)
     {
-        boost::shared_array<char> buffer(new char[size]);
-        
-        for (unsigned i = 0; i < size; ++i)
-            Read(buffer[i]);
+        boost::shared_ptr<char[]> buffer(boost::make_shared_noinit<char[]>(size));
+        char* p = buffer.get();
+        char* const p_end = p + size;
+
+        for (; p != p_end; ++p)
+        {
+            Read(*p);
+        }
 
         value.assign(buffer, size);
     }
@@ -204,12 +221,12 @@ private:
 };
 
 
-template <typename Unused> struct 
+template <typename Unused> struct
 uses_marshaled_bonded<RandomProtocolReader, Unused>
-    : boost::false_type {};
+    : std::false_type {};
 
-template <typename Unused> struct 
+template <typename Unused> struct
 uses_marshaled_bonded<RandomProtocolReader&, Unused>
-    : boost::false_type {};
+    : std::false_type {};
 
 }

@@ -1,5 +1,5 @@
 #include "precompiled.h"
-#include "allocator_test_types.h"
+#include "capped_allocator_tests_generated/allocator_test_types.h"
 #include "serialization_test.h"
 
 using namespace std;
@@ -143,7 +143,7 @@ void NullableTests(T& x, T& y, const S& s1, const L& l1)
 
     UT_AssertIsFalse(nl.empty());
     UT_AssertIsTrue(nl.value() == l);
-    
+
     float f = 3.14f;
     bond::nullable<float> nf(f);
     bond::nullable<bond::nullable<float> > nnf(nf);
@@ -213,13 +213,13 @@ void NullableTests(T& x, T& y, const S& s1, const L& l1)
 TEST_CASE_BEGIN(NullableInterface)
 {
     StructWithNullables x, y;
-    
+
     list<float> l;
     SimpleStruct s;
-    
+
     bond::nullable<list<float> > l1(l);
     bond::nullable<SimpleStruct> s1(s);
-    
+
     NullableTests(x, y, s1, l1);
 }
 TEST_CASE_END
@@ -227,30 +227,30 @@ TEST_CASE_END
 
 TEST_CASE_BEGIN(NullableAllocators)
 {
-    TestAllocator a1, a2;
+    using capped_allocator_tests::NullableFields;
+    using capped_allocator_tests::SimpleType;
 
-    allocator_test::NullableFields x(a1);
-    allocator_test::NullableFields y(a1);
-    
-    list<float, detail::TestAllocator<float> > l(a2);
-    allocator_test::SimpleType s(a2);
-    
-    bond::nullable<list<float, detail::TestAllocator<float> > > l1(l);
-    bond::nullable<allocator_test::SimpleType, TestAllocator> s1(s, a2);
-    
+    bond::ext::capped_allocator<> a1{ (std::numeric_limits<std::uint32_t>::max)() };
+    bond::ext::capped_allocator<> a2{ (std::numeric_limits<std::uint32_t>::max)() };
+
+    NullableFields x(a1);
+    NullableFields y(a1);
+
+    list<float, std::allocator_traits<bond::ext::capped_allocator<> >::rebind_alloc<float> > l(a2);
+    SimpleType s(a2);
+
+    bond::nullable<list<float,
+        std::allocator_traits<bond::ext::capped_allocator<> >::rebind_alloc<float> > > l1(l);
+    bond::nullable<SimpleType> s1(s, a2);
+
     NullableTests(x, y, s1, l1);
 
-    bond::nullable<std::set<bool, std::less<bool>, detail::TestAllocator<bool> > > n1(std::less<bool>(), a1);
+    bond::nullable<std::set<bool, std::less<bool>,
+        std::allocator_traits<bond::ext::capped_allocator<> >::rebind_alloc<bool> > > n1(a1);
     UT_AssertIsTrue(n1.empty());
 
-    // VS10SP1 is a joke and does not support swap on map/set with different allocators
-#if _MSC_VER<=1600
-    allocator_test::NullableSwappable ns1(a1);
-    allocator_test::NullableSwappable ns2(a2);
-#else
-    allocator_test::NullableFields ns1(a1);
-    allocator_test::NullableFields ns2(a2);
-#endif
+    NullableFields ns1(a1);
+    NullableFields ns2(a2);
 
     ns1.nullable_uint32.set();
     ns1.nullable_list.set();
@@ -275,24 +275,22 @@ TEST_CASE_BEGIN(NullableAllocators)
     UT_AssertIsTrue(ns1.nullable_struct.empty());
 }
 TEST_CASE_END
-    
+
 
 template <uint16_t N, typename Reader, typename Writer>
 void BasicTypesNullableTests(const char* name)
 {
     UnitTestSuite suite(name);
 
-#ifndef UNIT_TEST_SUBSET
-    AddTestCase<TEST_ID(N), 
+    AddTestCase<TEST_ID(N),
         AllBasicTypesNullables, Reader, Writer>(suite, "Nullable types and containers");
-#endif
 
-    AddTestCase<TEST_ID(N), 
+    AddTestCase<TEST_ID(N),
         StructNullables, Reader, Writer>(suite, "Nullable of structs");
 }
 
 
-void SerializationTest::NullableTestsInit()
+void NullableTestsInit()
 {
     TEST_SIMPLE_PROTOCOL(
         BasicTypesNullableTests<
@@ -329,4 +327,10 @@ void SerializationTest::NullableTestsInit()
 
     AddTestCase<TEST_ID(0x506),
         NullableAllocators>(suite, "Nullable allocators");
+}
+
+bool init_unit_test()
+{
+    NullableTestsInit();
+    return true;
 }

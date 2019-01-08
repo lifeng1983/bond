@@ -9,6 +9,10 @@ namespace Bond.Expressions.Json
     using System.Globalization;
     using System.Linq.Expressions;
 
+#if SUPPORTS_BIGINTEGER
+    using System.Numerics;
+#endif
+
     using Bond.Expressions.Pull;
     using Bond.Protocols;
 
@@ -58,12 +62,12 @@ namespace Bond.Expressions.Json
             // into a nullable
             var readJsonNullAsEmptyList = Expression.Block(
                 Reader.Read(),
-                handler(parser, elementType, Expression.Constant(false), Expression.Constant(0)));
+                handler(parser, elementType, Expression.Constant(false), Expression.Constant(0), null));
 
             // if the json contains an array, read the array into the list
             var readJsonArrayAsList = Expression.Block(
                 Reader.Read(),
-                handler(parser, elementType, JsonTokenNotEquals(JsonToken.EndArray), Expression.Constant(0)),
+                handler(parser, elementType, JsonTokenNotEquals(JsonToken.EndArray), Expression.Constant(0), null),
                 Reader.Read());
 
             return Expression.IfThenElse(
@@ -120,21 +124,44 @@ namespace Bond.Expressions.Json
             {
                 convertedValue = Reader.Value;
             }
-            
-            var errorMessage = string.Format(
-                CultureInfo.InvariantCulture,
-                "Invalid input, expected JSON token of type {0}",
-                scalarTokenType);
+
+            var errorMessage = 
+                StringExpression.Format(
+                    "Invalid input, expected JSON token of type {0}, encountered {1}",
+                    Expression.Constant(scalarTokenType, typeof(object)),
+                    Expression.Convert(Reader.TokenType, typeof(object)));
+
+            Expression embeddedExpression = handler(convertedValue);
+
+#if SUPPORTS_BIGINTEGER
+            if (expectedType == BondDataType.BT_UINT64 && scalarTokenType == JsonToken.Integer)
+            {
+                embeddedExpression =
+                    Expression.IfThenElse(
+                        Expression.TypeIs(Reader.Value, typeof(long)),
+                        embeddedExpression,
+                        handler(Expression.Convert(Reader.Value, typeof(BigInteger))));
+            }
+#endif
+
+            var handleValue =
+                Expression.IfThenElse(
+                    JsonTokenEquals(scalarTokenType),
+                    embeddedExpression,
+                    ThrowUnexpectedInput(errorMessage));
+
+            // If a floating point value is expected also accept an integer
+            if (scalarTokenType == JsonToken.Float)
+            {
+                handleValue = Expression.IfThenElse(
+                    JsonTokenEquals(JsonToken.Integer),
+                    handler(Expression.Convert(Reader.Value, typeof(long))),
+                    handleValue);
+            }
 
             return
                 Expression.Block(
-                    Expression.IfThenElse(
-                        JsonTokenEquals(JsonToken.Null),
-                        handler(Expression.Constant(null)),
-                        Expression.IfThenElse(
-                            JsonTokenEquals(scalarTokenType),
-                            handler(convertedValue),
-                            ThrowUnexpectedInput(errorMessage))),
+                    handleValue,
                     Reader.Read());
         }
 
@@ -197,14 +224,19 @@ namespace Bond.Expressions.Json
                     Expression.Convert(Reader.LinePosition, typeof(object))));
         }
 
-        Expression ThrowUnexpectedInput(string errorMessage)
+        Expression ThrowUnexpectedInput(Expression errorMessage)
         {
             return ThrowExpression.InvalidDataException(
                 StringExpression.Format(
                     "{0} (line {1} position {2})",
-                    Expression.Constant(errorMessage),
+                    errorMessage,
                     Expression.Convert(Reader.LineNumber, typeof(object)),
                     Expression.Convert(Reader.LinePosition, typeof(object))));
+        }
+
+        Expression ThrowUnexpectedInput(string errorMessage)
+        {
+            return ThrowUnexpectedInput(Expression.Constant(errorMessage));
         }
 
         Expression ProcessField(ParameterExpression requiredFields, IEnumerable<TransformSchemaPair> transforms)

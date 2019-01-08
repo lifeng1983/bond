@@ -26,11 +26,11 @@ namespace Bond.IO.Safe
 
         public virtual long Position
         {
-            get { return position - offset; } 
+            get { return position - offset; }
             set { position = offset + checked ((int)value); }
         }
 
-        public InputBuffer(byte[] data) 
+        public InputBuffer(byte[] data)
             : this(data, 0, data.Length)
         {}
 
@@ -41,7 +41,7 @@ namespace Bond.IO.Safe
         public InputBuffer(ArraySegment<byte> seg)
             : this(seg.Array, seg.Offset, seg.Count)
         {}
-        
+
         public InputBuffer(byte[] data, int offset, int length)
         {
             Debug.Assert(BitConverter.IsLittleEndian);
@@ -134,7 +134,7 @@ namespace Bond.IO.Safe
         }
 
         /// <summary>
-        /// Read little-endian encoded single precision ‎IEEE 754 float
+        /// Read little-endian encoded single precision IEEE 754 float
         /// </summary>
         /// <exception cref="EndOfStreamException"/>
         public virtual float ReadFloat()
@@ -149,7 +149,7 @@ namespace Bond.IO.Safe
         }
 
         /// <summary>
-        /// Read little-endian encoded double precision ‎IEEE 754 float
+        /// Read little-endian encoded double precision IEEE 754 float
         /// </summary>
         /// <exception cref="EndOfStreamException"/>
         public virtual double ReadDouble()
@@ -185,7 +185,7 @@ namespace Bond.IO.Safe
         /// <exception cref="EndOfStreamException"/>
         public ushort ReadVarUInt16()
         {
-            if (position >= end - IntegerHelper.MaxBytesVarInt16)
+            if (position > end - IntegerHelper.MaxBytesVarInt16)
             {
                 return (ushort)DecodeVarUInt64Checked();
             }
@@ -198,7 +198,7 @@ namespace Bond.IO.Safe
         /// <exception cref="EndOfStreamException"/>
         public uint ReadVarUInt32()
         {
-            if (position >= end - IntegerHelper.MaxBytesVarInt32)
+            if (position > end - IntegerHelper.MaxBytesVarInt32)
             {
                 return (uint)DecodeVarUInt64Checked();
             }
@@ -211,7 +211,7 @@ namespace Bond.IO.Safe
         /// <exception cref="EndOfStreamException"/>
         public ulong ReadVarUInt64()
         {
-            if (position >= end - IntegerHelper.MaxBytesVarInt64)
+            if (position > end - IntegerHelper.MaxBytesVarInt64)
             {
                 return DecodeVarUInt64Checked();
             }

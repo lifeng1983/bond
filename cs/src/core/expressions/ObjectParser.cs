@@ -10,10 +10,20 @@ namespace Bond.Expressions
     using System.Linq;
     using System.Linq.Expressions;
     using System.Reflection;
+    using Bond.Internal.Reflection;
+
+    /// <summary>
+    /// Creates expression of type <see cref="IBonded{T}"/> given a object type and value.
+    /// </summary>
+    /// <param name="objectType">Type of object to be stored in <see cref="IBonded"/></param>
+    /// <param name="value">Expression representing the value to be stored in the bonded instance.</param>
+    /// <returns>Expression representing creation of bonded with the specified value.</returns>
+    public delegate Expression ObjectBondedFactory(Type objectType, Expression value);
 
     public class ObjectParser : IParser
     {
         static readonly MethodInfo moveNext = Reflection.MethodInfoOf((IEnumerator e) => e.MoveNext());
+        static readonly ConstructorInfo arraySegmentCtor = typeof(ArraySegment<byte>).GetConstructor(typeof(byte[]));
         delegate Expression ContainerItemHandler(Expression value, Expression next, Expression count);
         readonly ParameterExpression objParam;
         readonly TypeAlias typeAlias;
@@ -21,19 +31,26 @@ namespace Bond.Expressions
         readonly Type schemaType;
         readonly Type objectType;
         readonly int hierarchyDepth;
+        readonly ObjectBondedFactory bondedFactory;
 
         public ObjectParser(Type type)
+            : this(type, null)
+        {}
+
+        public ObjectParser(Type type, ObjectBondedFactory bondedFactory)
         {
             typeAlias = new TypeAlias(type);
             value = objParam = Expression.Parameter(typeof(object), "obj");
             objectType = schemaType = type;
             hierarchyDepth = type.GetHierarchyDepth();
+            this.bondedFactory = bondedFactory ?? NewBonded;
         }
 
         ObjectParser(ObjectParser that, Expression value, Type schemaType)
         {
             typeAlias = that.typeAlias;
             objParam = that.objParam;
+            bondedFactory = that.bondedFactory;
             this.value = value;
             this.schemaType = schemaType;
             objectType = value.Type;
@@ -47,7 +64,7 @@ namespace Bond.Expressions
 
         public Expression Apply(ITransform transform)
         {
-            var structVar = Expression.Variable(objectType, objectType.Name);
+            var structVar = Expression.Variable(objectType, $"{objectType.Name}_obj");
             var body = new List<Expression>
             {
                 Expression.Assign(structVar, Expression.Convert(objParam, objectType)),
@@ -83,7 +100,27 @@ namespace Bond.Expressions
             var fieldId = Expression.Constant(id);
             var fieldType = Expression.Constant(fieldSchemaType.GetBondDataType());
             var fieldValue = DataExpression.PropertyOrField(structVar, schemaField.Name);
-            var parser = new ObjectParser(this, fieldValue, fieldSchemaType);
+
+            ObjectParser parser = null;
+
+            Expression blob = null;
+            ParameterExpression convertedBlob = null;
+
+            // To avoid calling Convert multiple times on the same aliased Blob
+            // we must construct a new ObjectParser with the expected return type of
+            // of Convert
+            if (fieldSchemaType.IsBondBlob())
+            {
+                blob = typeAlias.Convert(fieldValue, fieldSchemaType);
+                convertedBlob = Expression.Variable(blob.Type, "convertedBlob");
+
+                if (blob.Type != fieldValue.Type)
+                {
+                    parser = new ObjectParser(this, convertedBlob, convertedBlob.Type);
+                }
+            }
+
+            parser = parser ?? new ObjectParser(this, fieldValue, fieldSchemaType);
 
             var processField = field != null
                 ? field.Value(parser, fieldType)
@@ -97,26 +134,44 @@ namespace Bond.Expressions
             if (fieldSchemaType.IsBondStruct() || fieldSchemaType.IsBonded() || schemaField.GetModifier() != Modifier.Optional)
             {
                 cannotOmit = Expression.Constant(true);
+
+                if (fieldSchemaType.IsBondBlob())
+                {
+                    return Expression.Block(
+                        new[] { convertedBlob },
+                        Expression.Assign(convertedBlob, blob),
+                        processField);
+                }
+            }
+            else if (fieldSchemaType.IsBondBlob())
+            {
+                var notEqual = Expression.NotEqual(
+                    convertedBlob,
+                    Expression.Default(typeof(ArraySegment<byte>)));
+
+                return Expression.Block(
+                    new[] { convertedBlob },
+                    Expression.Assign(convertedBlob, blob),
+                    PrunedExpression.IfThenElse(notEqual, processField, omitField));
             }
             else
             {
                 var defaultValue = schemaField.GetDefaultValue();
 
-                if (fieldSchemaType.IsBondBlob())
+                if (defaultValue == null)
                 {
-                    cannotOmit = Expression.NotEqual(
-                        typeAlias.Convert(fieldValue, fieldSchemaType), 
-                        Expression.Default(typeof(ArraySegment<byte>)));
+                    cannotOmit = Expression.NotEqual(fieldValue, Expression.Constant(null));
                 }
                 else if (fieldSchemaType.IsBondContainer())
                 {
-                    cannotOmit = defaultValue == null
-                        ? Expression.NotEqual(fieldValue, Expression.Constant(null))
-                        : Expression.NotEqual(ContainerCount(fieldValue), Expression.Constant(0));
+                    cannotOmit = Expression.NotEqual(ContainerCount(fieldValue), Expression.Constant(0));
                 }
                 else
                 {
-                    cannotOmit = Expression.NotEqual(fieldValue, Expression.Constant(defaultValue));
+                    var comparand = defaultValue.GetType() != fieldValue.Type
+                                        ? (Expression)Expression.Default(fieldValue.Type)
+                                        : Expression.Constant(defaultValue);
+                    cannotOmit = Expression.NotEqual(fieldValue, comparand);
                 }
             }
 
@@ -137,14 +192,15 @@ namespace Bond.Expressions
                 new ObjectParser(this, item, itemType),
                 Expression.Constant(itemType.GetBondDataType()),
                 next,
-                count);
+                count,
+                null);
 
             if (value.Type.IsArray)
                 return ArrayContainer(itemHandler);
 
             if (value.Type.IsGenericType())
             {
-                if (typeof(IList<>).MakeGenericType(value.Type.GetGenericArguments()[0]).IsAssignableFrom(value.Type))
+                if (typeof(IList<>).MakeGenericType(value.Type.GetTypeInfo().GenericTypeArguments[0]).IsAssignableFrom(value.Type))
                     return ListContainer(itemHandler);
 
                 if (typeof(LinkedList<>) == value.Type.GetGenericTypeDefinition())
@@ -181,17 +237,18 @@ namespace Bond.Expressions
             {
                 return handler(value);
             }
-            
-            var bondedType = typeof(Bonded<>).MakeGenericType(objectType);
-            var bondedCtor = bondedType.GetConstructor(objectType);
 
-            return handler(Expression.New(bondedCtor, value));
+            var newBonded = bondedFactory(objectType, value);
+            return handler(newBonded);
         }
 
         public Expression Blob(Expression count)
         {
             if (schemaType.IsBondBlob())
                 return typeAlias.Convert(value, schemaType);
+
+            if (objectType == typeof(byte[]))
+                return Expression.New(arraySegmentCtor, value);
 
             // TODO: convert List<sbyte> to ArraySegment<byte> for faster serialization?
             return null;
@@ -211,6 +268,12 @@ namespace Bond.Expressions
         public override int GetHashCode()
         {
             return schemaType.GetHashCode();
+        }
+
+        static Expression NewBonded(Type objectType, Expression value)
+        {
+            var ctor = typeof(Bonded<>).MakeGenericType(objectType).GetConstructor(objectType);
+            return Expression.New(ctor, value);
         }
 
         static Expression ContainerCount(Expression container)
@@ -277,7 +340,7 @@ namespace Bond.Expressions
         {
             Debug.Assert(schemaType.IsBondContainer());
 
-            var nodeType = typeof(LinkedListNode<>).MakeGenericType(value.Type.GetGenericArguments()[0]);
+            var nodeType = typeof(LinkedListNode<>).MakeGenericType(value.Type.GetTypeInfo().GenericTypeArguments[0]);
             var node = Expression.Variable(nodeType, "node");
             var item = Expression.Property(node, "Value");
             var next = Expression.NotEqual(
@@ -299,43 +362,66 @@ namespace Bond.Expressions
 
             var valueType = schemaType.GetValueType();
             var count = Expression.Variable(typeof(int), "count");
-            var nullableValue = valueType.IsBondBlob() 
-                ? Expression.Property(typeAlias.Convert(value, valueType), "Array")
-                : value;
+
+            ParameterExpression convertedBlob = null;
+            var nullableValue = value;
+            var valueParser = new ObjectParser(this, value, valueType);
+
+            if (valueType.IsBondBlob()) {
+                convertedBlob = Expression.Variable(typeof(ArraySegment<byte>), "convertedBlob");
+                nullableValue = Expression.Property(convertedBlob, "Array");
+                valueParser = new ObjectParser(this, convertedBlob, convertedBlob.Type);
+            }
+
             var notNull = Expression.NotEqual(nullableValue, Expression.Constant(null));
 
             var loop = handler(
-                new ObjectParser(this, value, valueType),
+                valueParser,
                 Expression.Constant(valueType.GetBondDataType()),
                 Expression.NotEqual(Expression.PostDecrementAssign(count), Expression.Constant(0)),
-                count);
+                count,
+                null);
 
-            return Expression.Block(
-                new[] { count },
-                Expression.Assign(count, Expression.Condition(notNull, Expression.Constant(1), Expression.Constant(0))),
-                loop);
+            if (convertedBlob != null)
+            {
+                return Expression.Block(
+                    new[] { convertedBlob, count },
+                    Expression.Assign(convertedBlob, typeAlias.Convert(value, valueType)),
+                    Expression.Assign(count, Expression.Condition(notNull, Expression.Constant(1), Expression.Constant(0))),
+                    loop);
+            }
+            else
+            {
+                return Expression.Block(
+                    new[] { count },
+                    Expression.Assign(count, Expression.Condition(notNull, Expression.Constant(1), Expression.Constant(0))),
+                    loop);
+            }
         }
 
         Expression BlobContainer(ContainerHandler handler)
         {
             Debug.Assert(schemaType.IsBondBlob());
 
+            var arraySegment = Expression.Variable(typeof(ArraySegment<byte>), "arraySegment");
             var count = Expression.Variable(typeof(int), "count");
             var index = Expression.Variable(typeof(int), "index");
             var end = Expression.Variable(typeof(int), "end");
             var blob = typeAlias.Convert(value, schemaType);
-            var item = Expression.ArrayIndex(Expression.Property(blob, "Array"), Expression.PostIncrementAssign(index));
+            var item = Expression.ArrayIndex(Expression.Property(arraySegment, "Array"), Expression.PostIncrementAssign(index));
 
             var loop = handler(
                 new ObjectParser(this, item, typeof(sbyte)),
                 Expression.Constant(BondDataType.BT_INT8),
                 Expression.LessThan(index, end),
-                count);
+                count,
+                arraySegment);
 
             return Expression.Block(
-                new[] { count, index, end },
-                Expression.Assign(index, Expression.Property(blob, "Offset")),
-                Expression.Assign(count, Expression.Property(blob, "Count")),
+                new[] { arraySegment, count, index, end },
+                Expression.Assign(arraySegment, blob),
+                Expression.Assign(index, Expression.Property(arraySegment, "Offset")),
+                Expression.Assign(count, Expression.Property(arraySegment, "Count")),
                 Expression.Assign(end, Expression.Add(index, count)),
                 loop);
         }

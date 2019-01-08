@@ -14,7 +14,7 @@ namespace UnitTest
         {
             var seed = (int)DateTime.Now.ToBinary();
             random = new System.Random(seed);
-            System.Diagnostics.Trace.TraceInformation("Random seed {0}", seed);
+            System.Diagnostics.Debug.WriteLine("Random seed {0}", seed);
         }
 
         public static T Init<T>()
@@ -27,9 +27,15 @@ namespace UnitTest
             return new Deserializer<RandomReader>(typeof(T), factory)
                 .Deserialize<T>(new RandomReader(random));
         }
+
+        public static T Init<T>(Factory factory)
+        {
+            return new Deserializer<RandomReader>(typeof(T), factory)
+                .Deserialize<T>(new RandomReader(random));
+        }
     }
 
-    internal class RandomReader : IUntaggedProtocolReader, ICloneable<RandomReader>
+    internal class RandomReader : IClonableUntaggedProtocolReader, ICloneable<RandomReader>
     {
         readonly System.Random random;
 
@@ -44,7 +50,12 @@ namespace UnitTest
             this.random = random;
         }
 
-        public RandomReader Clone()
+        RandomReader ICloneable<RandomReader>.Clone()
+        {
+            return this;
+        }
+
+        IClonableUntaggedProtocolReader ICloneable<IClonableUntaggedProtocolReader>.Clone()
         {
             return this;
         }

@@ -3,7 +3,12 @@
 
 #pragma once
 
+#include <bond/core/config.h>
+
+#include "sdl.h"
 #include "tags.h"
+
+#include <bond/core/bond_types.h>
 
 namespace bond
 {
@@ -27,7 +32,7 @@ operator==(const Variant& variant, SignedT value)
 /// unsigned integer \a value.
 template <typename UnsignedT>
 inline
-typename boost::enable_if<is_unsigned<UnsignedT>, bool>::type
+typename boost::enable_if<std::is_unsigned<UnsignedT>, bool>::type
 operator==(const Variant& variant, UnsignedT value)
 {
     BOOST_ASSERT(!variant.nothing);
@@ -41,7 +46,7 @@ inline bool
 operator==(const Variant& variant, bool value)
 {
     BOOST_ASSERT(!variant.nothing);
-    BOOST_STATIC_ASSERT((is_unsigned<bool>::value));
+    BOOST_STATIC_ASSERT((std::is_unsigned<bool>::value));
 
     return value == !!variant.uint_value;
 }
@@ -104,7 +109,7 @@ namespace detail
 // VariantSet
 template <typename T>
 inline
-typename boost::enable_if<is_unsigned<T> >::type
+typename boost::enable_if<std::is_unsigned<T> >::type
 VariantSet(bond::Variant& variant, const T& value)
 {
     variant.uint_value = value;
@@ -152,7 +157,7 @@ VariantGet(const bond::Variant& variant, bool& var)
 
 template <typename T>
 inline
-typename boost::enable_if<is_unsigned<T> >::type
+typename boost::enable_if<std::is_unsigned<T> >::type
 VariantGet(const bond::Variant& variant, T& var)
 {
     BOOST_ASSERT(!variant.nothing);
@@ -172,7 +177,7 @@ VariantGet(const bond::Variant& variant, T& var)
 
 template <typename T>
 inline
-typename boost::enable_if<is_floating_point<T> >::type
+typename boost::enable_if<std::is_floating_point<T> >::type
 VariantGet(const bond::Variant& variant, T& var)
 {
     BOOST_ASSERT(!variant.nothing);
@@ -186,8 +191,14 @@ typename boost::enable_if<is_string<T> >::type
 VariantGet(const bond::Variant& variant, T& var)
 {
     BOOST_ASSERT(!variant.nothing);
-    resize_string(var, static_cast<uint32_t>(variant.string_value.size()));
-    variant.string_value.copy(string_data(var), variant.string_value.size());
+
+    const size_t size = variant.string_value.size();
+    resize_string(var, static_cast<uint32_t>(size));
+
+    std::copy(
+        variant.string_value.begin(),
+        variant.string_value.end(),
+        detail::make_checked_array_iterator(string_data(var), size));
 }
 
 
@@ -197,15 +208,21 @@ typename boost::enable_if<is_wstring<T> >::type
 VariantGet(const bond::Variant& variant, T& var)
 {
     BOOST_ASSERT(!variant.nothing);
-    resize_string(var, static_cast<uint32_t>(variant.wstring_value.size()));
-    variant.wstring_value.copy(string_data(var), variant.wstring_value.size());
+
+    const size_t size = variant.wstring_value.size();
+    resize_string(var, static_cast<uint32_t>(size));
+
+    std::copy(
+        variant.wstring_value.begin(),
+        variant.wstring_value.end(),
+        detail::make_checked_array_iterator(string_data(var), size));
 }
 
 
 // Returns name for basic types, overloaded by generated code for enums
 template <typename T>
 inline
-typename boost::disable_if<is_enum<T>, const char*>::type
+typename boost::disable_if<std::is_enum<T>, const char*>::type
 GetTypeName(T, const qualified_name_tag&)
 {
     switch (get_type_id<T>::value)
@@ -229,7 +246,7 @@ GetTypeName(T, const qualified_name_tag&)
 
 template <typename T>
 inline
-typename boost::enable_if<is_enum<T>, const char*>::type
+typename boost::enable_if<std::is_enum<T>, const char*>::type
 GetTypeName(T e, const qualified_name_tag&)
 {
     // In the older versions of generated code we didn't have the overload of
@@ -248,6 +265,15 @@ struct type
     }
 };
 
+// service
+template <typename T>
+struct type<T, typename boost::enable_if<std::is_class<typename T::Schema::methods> >::type>
+{
+    static std::string name()
+    {
+        return T::Schema().metadata.qualified_name;
+    }
+};
 
 // string
 template <typename T>

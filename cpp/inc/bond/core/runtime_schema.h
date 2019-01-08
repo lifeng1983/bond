@@ -3,8 +3,12 @@
 
 #pragma once
 
-#include <bond/core/bond_types.h>
+#include <bond/core/config.h>
+
 #include "detail/nonassignable.h"
+
+#include <bond/core/bond_types.h>
+
 #include <boost/shared_ptr.hpp>
 
 namespace bond
@@ -27,22 +31,19 @@ public:
           type(NULL)
     {}
 
-#ifndef BOND_NO_CXX11_RVALUE_REFERENCES
-    RuntimeSchema(RuntimeSchema&& rhs)
+    RuntimeSchema(RuntimeSchema&& rhs) BOND_NOEXCEPT_IF(
+        std::is_nothrow_move_constructible<boost::shared_ptr<SchemaDef> >::value)
         : schema(rhs.schema),
           type(rhs.type),
           instance(std::move(rhs.instance))
     {}
-#endif
 
-#ifndef BOND_NO_CXX11_DEFAULTED_FUNCTIONS
     RuntimeSchema& operator=(const RuntimeSchema& that) = default;
-#endif
 
     /// @brief Construct from a share_ptr to a SchemaDef object
     RuntimeSchema(const boost::shared_ptr<SchemaDef>& schema);
-    
-    /// @brief Construct from a reference to a SchemaDef object 
+
+    /// @brief Construct from a reference to a SchemaDef object
     ///
     /// This ctor should be used only when it can be guaranteed that liftime of
     /// the SchemaDef object referenced by the schema argument is longer than
@@ -64,7 +65,7 @@ public:
     {
         return *schema;
     }
-    
+
     const TypeDef& GetType() const
     {
         return *type;

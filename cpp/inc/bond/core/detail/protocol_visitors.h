@@ -3,18 +3,27 @@
 
 #pragma once
 
-#include "tags.h"
+#include <bond/core/config.h>
+
 #include "pass_through.h"
+#include "tags.h"
+
+#include <bond/core/customize.h>
+#include <bond/core/null.h>
+#include <bond/core/protocol.h>
+#include <bond/core/traits.h>
 #include <bond/stream/input_buffer.h>
 #include <bond/stream/output_buffer.h>
-#include <bond/core/traits.h>
+
+#include <cstddef>
+
 
 namespace bond
 {
 
 class RuntimeSchema;
 
-template <typename Writer>
+template <typename Writer, typename Protocols>
 class Serializer;
 
 namespace detail
@@ -24,8 +33,7 @@ namespace detail
 // It is used to dispatch to appropriate protocol at runtime.
 template <typename T, typename Schema, typename Transform>
 class _Parser
-    : public boost::static_visitor<bool>,
-      boost::noncopyable
+    : boost::noncopyable
 {
 public:
     _Parser(const Transform& transform, const Schema& schema)
@@ -33,17 +41,17 @@ public:
           _schema(schema)
     {}
 
-    
+
     template <typename Reader>
-    typename boost::enable_if<is_protocol_enabled<typename remove_const<Reader>::type>, bool>::type
+    typename boost::enable_if<is_protocol_enabled<typename std::remove_const<Reader>::type>, bool>::type
     operator()(Reader& reader) const
     {
-        // Apply transform to serialized data 
-        return Apply(_transform, reader);
+        // Apply transform to serialized data
+        return Apply(_transform, reader, _schema, false);
     }
 
     template <typename Reader>
-    typename boost::disable_if<is_protocol_enabled<typename remove_const<Reader>::type>, bool>::type
+    typename boost::disable_if<is_protocol_enabled<typename std::remove_const<Reader>::type>, bool>::type
     operator()(Reader& /*reader*/) const
     {
         // Don't instantiate deserialization code for disabled protocol to speed up build
@@ -51,48 +59,56 @@ public:
         return false;
     }
 
-protected:
-    template <template <typename U> class Reader, typename Writer>
-    typename boost::enable_if_c<is_protocol_same<Reader<InputBuffer>, Writer>::value
-                             && protocol_has_multiple_versions<Reader<InputBuffer> >::value, bool>::type
-    Apply(const Serializer<Writer>&, Reader<InputBuffer>& reader) const
+    template <typename Reader, typename Writer, typename Protocols>
+    static
+    typename boost::enable_if_c<is_protocol_same<Reader, Writer>::value
+                             && protocol_has_multiple_versions<Reader>::value, bool>::type
+    Apply(const Serializer<Writer, Protocols>& transform, Reader& reader, const Schema& schema, bool base)
     {
-        if (is_protocol_version_same(reader, _transform._output))
-            return FastPassThrough(reader, _schema);
+        if (is_protocol_version_same(reader, transform._output))
+            return FastPassThrough(reader, transform._output, schema);
         else
-            return typename Reader<InputBuffer>::Parser(reader, false).Apply(_transform, _schema);
+            return typename Reader::Parser(reader, base).Apply(transform, schema);
     }
 
-    template <template <typename U> class Reader, typename Writer>
-    typename boost::enable_if_c<is_protocol_same<Reader<InputBuffer>, Writer>::value
-                             && !protocol_has_multiple_versions<Reader<InputBuffer> >::value, bool>::type
-    Apply(const Serializer<Writer>&, Reader<InputBuffer>& reader) const
+    template <typename Reader, typename Writer, typename Protocols>
+    static
+    typename boost::enable_if_c<is_protocol_same<Reader, Writer>::value
+                             && !protocol_has_multiple_versions<Reader>::value, bool>::type
+    Apply(const Serializer<Writer, Protocols>& transform, Reader& reader, const Schema& schema, bool base)
     {
-        return FastPassThrough(reader, _schema);
-    }
-
-    template <typename Reader, typename SchemaT>
-    bool FastPassThrough(Reader& reader, const SchemaT&) const
-    {
-        bonded<T, Reader&> value(reader);
-        detail::PassThrough(value, reader, _transform._output);
-        return false;
-    }
-
-    template <typename Reader>
-    bool FastPassThrough(Reader& reader, const RuntimeSchema&) const
-    {
-        bonded<void, Reader&> value(reader, _schema);
-        detail::PassThrough(value, reader, _transform._output);
-        return false;
+        BOOST_VERIFY(!base);
+        // Triggering the following assert means that bond::enable_protocol_versions trait is
+        // defined/specialized inconsistently for the protocol in different compilation units.
+        BOOST_ASSERT(is_protocol_version_same(reader, transform._output));
+        return FastPassThrough(reader, transform._output, schema);
     }
 
     template <typename TransformT, typename Reader>
-    bool Apply(const TransformT&, Reader& reader) const
+    static
+    bool Apply(const TransformT& transform, Reader& reader, const Schema& schema, bool base)
     {
-        return typename Reader::Parser(reader, false).Apply(_transform, _schema);
+        return typename Reader::Parser(reader, base).Apply(transform, schema);
     }
 
+protected:
+    template <typename Reader, typename Writer, typename SchemaT>
+    static
+    bool FastPassThrough(Reader& reader, Writer& writer, const SchemaT&)
+    {
+        bonded<T, Reader&> value(reader);
+        PassThrough(value, reader, writer);
+        return false;
+    }
+
+    template <typename Reader, typename Writer>
+    static
+    bool FastPassThrough(Reader& reader, Writer& writer, const RuntimeSchema& schema)
+    {
+        bonded<void, Reader&> value(reader, schema);
+        PassThrough(value, reader, writer);
+        return false;
+    }
 
     const Transform& _transform;
     const Schema&    _schema;
@@ -100,7 +116,7 @@ protected:
 
 
 template <typename T, typename Schema, typename Transform, typename Enable = void>
-class Parser 
+class Parser
     : public _Parser<T, Schema, Transform>
 {
 public:
@@ -120,7 +136,7 @@ public:
 
 
 template <typename T, typename Schema, typename Transform>
-class Parser<T, Schema, Transform, typename boost::enable_if_c<is_serializing_transform<Transform>::value && !is_same<T, void>::value>::type>
+class Parser<T, Schema, Transform, typename boost::enable_if_c<is_serializing_transform<Transform>::value && !std::is_same<T, void>::value>::type>
     : public _Parser<T, Schema, Transform>
 {
 public:
@@ -132,9 +148,9 @@ public:
 
     bool operator()(ValueReader& value) const
     {
-        // Serializing bonded<T> containing a non-serialized instance of T 
+        // Serializing bonded<T> containing a non-serialized instance of T
         BOOST_ASSERT(value.pointer);
-        // NOTE TO USER: following assert may indicate that the generated file 
+        // NOTE TO USER: following assert may indicate that the generated file
         // _reflection.h was not included in compilation unit where T is serialized.
         BOOST_ASSERT(has_schema<T>::value);
         return StaticParser<const T&>(*static_cast<const T*>(value.pointer)).Apply(_transform, typename schema_for_passthrough<T>::type());
@@ -146,95 +162,127 @@ protected:
 
 
 template <typename Reader, typename T>
-inline void Skip(Reader& reader, const T& bonded)
+inline void Skip(Reader& reader, const bonded<T, Reader&>& bonded)
 {
     reader.Skip(bonded);
 }
 
+
+template <typename T, template <typename BufferT, typename MarshaledBondedProtocolsT> class Reader, typename Buffer, typename MarshaledBondedProtocols>
+inline void Skip(const bonded<T, Reader<Buffer, MarshaledBondedProtocols>&>& bonded)
+{
+    // Skip the structure field-by-field by applying Null transform
+    Apply<MarshaledBondedProtocols>(Null(), bonded);
+}
+
+
 template <typename Reader, typename T>
-BOND_NO_INLINE void Skip(Reader& reader, const T& bonded, const std::nothrow_t&)
+BOND_NO_INLINE void Skip(Reader& reader, const bonded<T, Reader&>& bonded, const std::nothrow_t&)
 {
     try
     {
-        reader.Skip(bonded);
+        Skip(reader, bonded);
     }
     catch(...)
-    {
-    }
+    {}
 }
 
 
-template <typename T, typename Buffer>
-inline void Skip(ProtocolReader<Buffer>& /*reader*/, const T& /*bonded*/)
+template <typename T>
+inline void Skip(ProtocolReader& /*reader*/, const bonded<T>& /*bonded*/)
 {
     // Not skipping for outer structures
 }
 
 
-template <typename T, typename Buffer>
-inline void Skip(ProtocolReader<Buffer>& /*reader*/, const T& /*bonded*/, const std::nothrow_t&)
+template <typename T>
+inline void Skip(ProtocolReader& /*reader*/, const bonded<T>& /*bonded*/, const std::nothrow_t&)
 {
     // Not skipping for outer structures
 }
 
 
-template <typename T, typename Transform, typename Reader, typename Schema>
+template <typename T, typename Protocols, typename Transform, typename Reader, typename Schema>
 inline bool Parse(const Transform& transform, Reader& reader, const Schema& schema, const RuntimeSchema* runtime_schema, bool base)
 {
     BOOST_VERIFY(!runtime_schema);
-    return typename Reader::Parser(reader, base).Apply(transform, schema);
+    return Parser<T, Schema, Transform>::Apply(transform, reader, schema, base);
 }
 
+template <typename T, typename Protocols, typename Transform, typename Reader, typename Schema>
+inline bool Parse(const Transform& transform, Reader& reader, const Schema& schema, std::nullptr_t, bool base)
+{
+    return Parser<T, Schema, Transform>::Apply(transform, reader, schema, base);
+}
 
-template <typename T, typename Transform, typename Buffer, typename Schema>
-inline bool Parse(const Transform& transform, ProtocolReader<Buffer> reader, const Schema& schema, const RuntimeSchema* runtime_schema, bool base)
+template <typename T, typename Protocols, typename Transform, typename Schema>
+inline bool Parse(const Transform& transform, ProtocolReader& reader, const Schema& schema)
+{
+    // Use named variable to avoid gcc silently copying objects (which
+    // causes build break, because Parser<> is non-copyable).
+    Parser<T, Schema, Transform> parser(transform, schema);
+
+    if (auto&& result = reader.template Visit<Protocols
+#if defined(BOND_NO_CXX14_RETURN_TYPE_DEDUCTION) || defined(BOND_NO_CXX14_GENERIC_LAMBDAS)
+        , bool
+#endif
+        >(parser))
+    {
+        return result.get();
+    }
+
+    UnknownProtocolException();
+}
+
+template <typename T, typename Protocols, typename Transform, typename Schema>
+inline bool Parse(const Transform& transform, ProtocolReader reader, const Schema& schema, const RuntimeSchema* runtime_schema, bool base)
 {
     BOOST_VERIFY(!base);
-    
+
     if (runtime_schema)
     {
-        // Use named variable to avoid gcc silently copying objects (which
-        // causes build break, because Parse<> is non-copyable).
-        detail::Parser<void, RuntimeSchema, Transform> parser(transform, *runtime_schema);
-        return boost::apply_visitor(parser, reader.value);
+        return Parse<void, Protocols>(transform, reader, *runtime_schema);
     }
     else
     {
-        // Use named variable to avoid gcc silently copying objects (which
-        // causes build break, because Parse<> is non-copyable).
-        detail::Parser<T, Schema, Transform> parser(transform, schema);
-        return boost::apply_visitor(parser, reader.value);
+        return Parse<T, Protocols>(transform, reader, schema);
     }
 }
 
+template <typename T, typename Protocols, typename Transform, typename Schema>
+inline bool Parse(const Transform& transform, ProtocolReader reader, const Schema& schema, std::nullptr_t, bool base)
+{
+    BOOST_VERIFY(!base);
+    return Parse<T, Protocols>(transform, reader, schema);
+}
 
-// Visitor which updates in-situ bonded<T> playload by merging it with an object.
+
+// Visitor which updates in-situ bonded<T> payload by merging it with an object.
 template <typename T, typename Buffer>
 class InsituMerge
-    : public boost::static_visitor<>,
-      boost::noncopyable
+    : boost::noncopyable
 {
 public:
-    InsituMerge(const T& var, ProtocolReader<Buffer>& reader)
+    InsituMerge(const T& var, ProtocolReader& reader)
         : _var(var),
           _reader(reader)
     {}
 
-    
-    template <template <typename U> class Reader>
-    typename boost::enable_if<is_protocol_enabled<typename remove_const<Reader<Buffer> >::type> >::type
-    operator()(Reader<Buffer>& reader) const
+
+    template <typename Reader>
+    typename boost::enable_if<is_protocol_enabled<typename std::remove_const<Reader>::type> >::type
+    operator()(Reader& reader) const
     {
-        OutputBuffer merged;
-        typename Reader<OutputBuffer>::Writer writer(merged);
-        
+        Buffer merged;
+        typename get_protocol_writer<Reader, Buffer>::type writer(merged);
+
         Merge(_var, reader, writer);
 
-        _reader = Reader<Buffer>(merged.GetBuffer());
+        _reader = Reader(merged.GetBuffer());
     }
 
     template <typename Reader>
-    typename boost::disable_if<is_protocol_enabled<typename remove_const<Reader>::type> >::type
+    typename boost::disable_if<is_protocol_enabled<typename std::remove_const<Reader>::type> >::type
     operator()(Reader& /*reader*/) const
     {
         // Don't instantiate code for disabled protocol to speed up build
@@ -247,21 +295,27 @@ public:
         // Merge is undefined for non-serialized instance of T
         BOOST_VERIFY(false);
     }
-    
+
 private:
     const T& _var;
-    ProtocolReader<Buffer>& _reader;
+    ProtocolReader& _reader;
 };
 
 
-template <typename T, typename Buffer>
-inline void Merge(const T& var, ProtocolReader<Buffer>& reader)
+template <typename Protocols, typename Buffer = OutputBuffer, typename T>
+inline void Merge(const T& var, ProtocolReader& reader)
 {
-    boost::apply_visitor(detail::InsituMerge<T, Buffer>(var, reader), reader.value);
+    if (!reader.template Visit<Protocols
+#if defined(BOND_NO_CXX14_RETURN_TYPE_DEDUCTION) || defined(BOND_NO_CXX14_GENERIC_LAMBDAS)
+        , void
+#endif
+        >(InsituMerge<T, Buffer>(var, reader)))
+    {
+        UnknownProtocolException();
+    }
 }
 
 
-}; // namespace detail
+} // namespace detail
 
-
-}; // namespace bond
+} // namespace bond

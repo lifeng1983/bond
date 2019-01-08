@@ -3,9 +3,12 @@
 
 #pragma once
 
-#include <exception>
-#include <bond/core/containers.h>
+#include <bond/core/config.h>
+
 #include <bond/core/blob.h>
+#include <bond/core/containers.h>
+
+#include <exception>
 #include <stdio.h>
 
 namespace bond
@@ -14,20 +17,25 @@ namespace bond
 
 template <typename Buffer, typename T, typename Enable = void> struct
 implements_varint_write
-    : false_type {};
+    : std::false_type {};
 
 
 template <typename Buffer, typename T> struct
-implements_varint_write<Buffer, T, typename boost::enable_if<bond::check_method<void (Buffer::*)(T), &Buffer::WriteVariableUnsigned> >::type>
-    : true_type {};
+implements_varint_write<Buffer, T,
+#ifdef BOND_NO_SFINAE_EXPR
+    typename boost::enable_if<check_method<void (Buffer::*)(T), &Buffer::WriteVariableUnsigned> >::type>
+#else
+    detail::mpl::void_t<decltype(std::declval<Buffer>().WriteVariableUnsigned(std::declval<T>()))>>
+#endif
+    : std::true_type {};
 
 
 template<typename Buffer, typename T>
-inline 
+inline
 typename boost::enable_if<implements_varint_write<Buffer, T> >::type
 WriteVariableUnsigned(Buffer& output, T value)
 {
-    BOOST_STATIC_ASSERT(is_unsigned<T>::value);
+    BOOST_STATIC_ASSERT(std::is_unsigned<T>::value);
 
     // Use Buffer's implementation of WriteVariableUnsigned
     output.WriteVariableUnsigned(value);
@@ -35,11 +43,11 @@ WriteVariableUnsigned(Buffer& output, T value)
 
 
 template<typename Buffer, typename T>
-inline 
+inline
 typename boost::disable_if<implements_varint_write<Buffer, T> >::type
 WriteVariableUnsigned(Buffer& output, T value)
 {
-    BOOST_STATIC_ASSERT(is_unsigned<T>::value);
+    BOOST_STATIC_ASSERT(std::is_unsigned<T>::value);
 
     // Use generic WriteVariableUnsigned
     GenericWriteVariableUnsigned(output, value);
@@ -66,22 +74,27 @@ void GenericWriteVariableUnsigned(Buffer& output, T value)
 
 template <typename Buffer, typename T, typename Enable = void> struct
 implements_varint_read
-    : false_type {};
+    : std::false_type {};
 
 
 template <typename Buffer, typename T> struct
-implements_varint_read<Buffer, T, typename boost::enable_if<bond::check_method<void (Buffer::*)(T&), &Buffer::ReadVariableUnsigned> >::type>
-    : true_type {};
+implements_varint_read<Buffer, T,
+#ifdef BOND_NO_SFINAE_EXPR
+    typename boost::enable_if<check_method<void (Buffer::*)(T&), &Buffer::ReadVariableUnsigned> >::type>
+#else
+    detail::mpl::void_t<decltype(std::declval<Buffer>().ReadVariableUnsigned(std::declval<T&>()))>>
+#endif
+    : std::true_type {};
 
 
 template<typename Buffer, typename T>
-inline 
+inline
 typename boost::enable_if<implements_varint_read<Buffer, T> >::type
 ReadVariableUnsigned(Buffer& input, T& value)
 {
-    BOOST_STATIC_ASSERT(is_unsigned<T>::value);
+    BOOST_STATIC_ASSERT(std::is_unsigned<T>::value);
 
-    // Use Buffer's implementation of ReadVariableUnsigned 
+    // Use Buffer's implementation of ReadVariableUnsigned
     input.ReadVariableUnsigned(value);
 }
 
@@ -107,46 +120,32 @@ void GenericReadVariableUnsigned(Buffer& input, T& value)
 
 
 template<typename Buffer, typename T>
-inline 
+inline
 typename boost::disable_if<implements_varint_read<Buffer, T> >::type
 ReadVariableUnsigned(Buffer& input, T& value)
 {
-    BOOST_STATIC_ASSERT(is_unsigned<T>::value);
-    
+    BOOST_STATIC_ASSERT(std::is_unsigned<T>::value);
+
     // Use generic ReadVariableUnsigned
     GenericReadVariableUnsigned(input, value);
 }
 
 
-// If protocol's Write(const bond::blob&) method doesn't write raw blob to 
-// output, this function needs to be overloaded appropriately.
-template <typename Writer>
-inline void WriteRawBlob(Writer& writer, const blob& data)
-{
-    writer.Write(data);
-}
-
-
 // ZigZag encoding
 template<typename T>
-inline 
-typename make_unsigned<T>::type EncodeZigZag(T value) 
+inline
+typename std::make_unsigned<T>::type EncodeZigZag(T value)
 {
     return (value << 1) ^ (value >> (sizeof(T) * 8 - 1));
 }
 
-#pragma warning(push)
-#pragma warning(disable: 4146)
-
 // ZigZag decoding
 template<typename T>
-inline 
-typename make_signed<T>::type DecodeZigZag(T value)
+inline
+typename std::make_signed<T>::type DecodeZigZag(T value)
 {
-    return (value >> 1) ^ (-(value & 1));
+    return (value >> 1) ^ (-static_cast<typename std::make_signed<T>::type>((value & 1)));
 }
-
-#pragma warning(pop)
 
 
 namespace detail
@@ -198,11 +197,12 @@ inline ReadStringData(Buffer& input, T& value, uint32_t length)
 {
     resize_string(value, length);
     typename element_type<T>::type* data = string_data(value);
+    typename element_type<T>::type* const data_end = data + length;
     typename string_char_int_type<T>::type ch;
-    for (int i = 0; i < length; ++i)
+    for (; data != data_end; ++data)
     {
         input.Read(ch);
-        data[i] = static_cast<typename element_type<T>::type>(ch);
+        *data = static_cast<typename element_type<T>::type>(ch);
     }
 }
 
@@ -218,10 +218,11 @@ typename boost::enable_if_c<(sizeof(typename element_type<T>::type) > sizeof(typ
 inline WriteStringData(Buffer& output, const T& value, uint32_t length)
 {
     const typename element_type<T>::type* data = string_data(value);
+    const typename element_type<T>::type* const data_end = data + length;
     typename string_char_int_type<T>::type ch;
-    for (int i = 0; i < length; ++i)
+    for (; data != data_end; ++data)
     {
-        ch = static_cast<typename string_char_int_type<T>::type>(data[i]);
+        ch = static_cast<typename string_char_int_type<T>::type>(*data);
         output.Write(ch);
     }
 }

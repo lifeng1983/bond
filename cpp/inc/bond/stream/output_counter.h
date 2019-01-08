@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <bond/core/config.h>
+
 #include <bond/core/blob.h>
 
 namespace bond
@@ -49,14 +51,25 @@ struct VariableUnsigned<uint16_t, 3>
     }
 };
 
-class OutputCounter 
+class OutputCounter
 {
+
+    struct Buffer
+    {
+        uint32_t _size;
+
+        uint32_t size() const
+        {
+            return _size;
+        }
+    };
+
 public:
     OutputCounter()
         : _count(0)
     {}
-          
-    uint32_t GetCount()
+
+    uint32_t GetCount() const
     {
         return _count;
     }
@@ -66,26 +79,42 @@ public:
     {
         _count += sizeof(T);
     }
-    
+
     void Write(const void*, uint32_t size)
-    {    
+    {
         _count += size;
     }
-    
+
     void Write(const blob& buffer)
     {
         _count += buffer.size();
     }
-    
+
+    void Write(const Buffer& buffer)
+    {
+        _count += buffer.size();
+    }
+
     template<typename T>
     void WriteVariableUnsigned(T value)
     {
         VariableUnsigned<T, 1>::Write(_count, value >> 7);
     }
 
+    Buffer GetBuffer() const
+    {
+        return { GetCount() };
+    }
+
 private:
     uint32_t _count;
 };
+
+
+inline OutputCounter CreateOutputBuffer(const OutputCounter& /*other*/)
+{
+    return OutputCounter();
+}
 
 
 } // namespace bond

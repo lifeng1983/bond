@@ -3,75 +3,62 @@
 
 #pragma once
 
-#pragma warning(push)
-// boost\variant\variant.hpp(762) :
-//      warning C4512: 'boost::detail::variant::comparer<Variant,Comp>' : assignment operator could not be generated
-#pragma warning(disable : 4512 4702)
-
-#include <boost/make_shared.hpp>
-#include <boost/variant.hpp>
-#include <boost/ref.hpp>
-#include <boost/mpl/list.hpp>
-#include <boost/mpl/push_front.hpp>
-#include <boost/mpl/copy_if.hpp>
-
-#pragma warning(pop)
+#include <bond/core/config.h>
 
 #include "customize.h"
+#include "detail/any.h"
+#include "detail/mpl.h"
 #include "detail/odr.h"
-#include <bond/protocol/simple_binary.h>
+#include "detail/visit_any.h"
+#include "traits.h"
+
 #include <bond/protocol/compact_binary.h>
 #include <bond/protocol/fast_binary.h>
+#include <bond/protocol/simple_binary.h>
 #include <bond/protocol/simple_json_reader.h>
+#include <bond/stream/input_buffer.h>
 
-#if !defined(BOND_COMPACT_BINARY_PROTOCOL) \
- && !defined(BOND_SIMPLE_BINARY_PROTOCOL) \
- && !defined(BOND_FAST_BINARY_PROTOCOL) \
- && !defined(BOND_SIMPLE_JSON_PROTOCOL)
+#include <boost/make_shared.hpp>
+#include <boost/optional.hpp>
+#include <boost/ref.hpp>
 
-#   define BOND_COMPACT_BINARY_PROTOCOL
-#   define BOND_SIMPLE_BINARY_PROTOCOL
-#   define BOND_FAST_BINARY_PROTOCOL
-// BOND_SIMPLE_JSON_PROTOCOL disabled by default
-
-#endif
 
 namespace bond
 {
 
 #ifdef BOND_COMPACT_BINARY_PROTOCOL
-template <typename Buffer> struct 
-is_protocol_enabled<CompactBinaryReader<Buffer> > 
-    : true_type {};
-#endif 
+template <typename Buffer> struct
+is_protocol_enabled<CompactBinaryReader<Buffer> >
+    : std::true_type {};
+#endif
 
 #ifdef BOND_SIMPLE_BINARY_PROTOCOL
-template <typename Buffer> struct 
-is_protocol_enabled<SimpleBinaryReader<Buffer> > 
-    : true_type {};
-#endif 
+template <typename Buffer, typename MarshaledBondedProtocols> struct
+is_protocol_enabled<SimpleBinaryReader<Buffer, MarshaledBondedProtocols> >
+    : std::true_type {};
+#endif
 
 #ifdef BOND_SIMPLE_JSON_PROTOCOL
-template <typename Buffer> struct 
-is_protocol_enabled<SimpleJsonReader<Buffer> > 
-    : true_type {};
-#endif 
+template <typename Buffer> struct
+is_protocol_enabled<SimpleJsonReader<Buffer> >
+    : std::true_type {};
+#endif
 
 #ifdef BOND_FAST_BINARY_PROTOCOL
-template <typename Buffer> struct 
-is_protocol_enabled<FastBinaryReader<Buffer> > 
-    : true_type {};
-#endif 
+template <typename Buffer> struct
+is_protocol_enabled<FastBinaryReader<Buffer> >
+    : std::true_type {};
+#endif
 
 // uses_static_parser
 template <typename Reader, typename Enable = void> struct
 uses_static_parser
-    : false_type {};
+    : std::false_type {};
 
 template <typename Reader> struct
 uses_static_parser<Reader, typename boost::enable_if<
-    is_same<typename Reader::Parser, StaticParser<Reader&> > >::type>
-    : true_type {};
+    std::is_same<typename Reader::Parser, StaticParser<Reader&> > >::type>
+    : std::true_type {};
 
 template <typename Reader> struct
 uses_static_parser<Reader&>
@@ -80,12 +67,12 @@ uses_static_parser<Reader&>
 // uses_dynamic_parser
 template <typename Reader, typename Enable = void> struct
 uses_dynamic_parser
-    : false_type {};
+    : std::false_type {};
 
 template <typename Reader> struct
 uses_dynamic_parser<Reader, typename boost::enable_if<
-    is_same<typename Reader::Parser, DynamicParser<Reader&> > >::type>
-    : true_type {};
+    std::is_same<typename Reader::Parser, DynamicParser<Reader&> > >::type>
+    : std::true_type {};
 
 template <typename Reader> struct
 uses_dynamic_parser<Reader&>
@@ -94,33 +81,81 @@ uses_dynamic_parser<Reader&>
 // uses_dom_parser
 template <typename Reader, typename Enable = void> struct
 uses_dom_parser
-    : false_type {};
+    : std::false_type {};
 
 template <typename Reader> struct
 uses_dom_parser<Reader, typename boost::enable_if<
-    is_same<typename Reader::Parser, DOMParser<Reader&> > >::type>
-    : true_type {};
+    std::is_same<typename Reader::Parser, DOMParser<Reader&> > >::type>
+    : std::true_type {};
 
 template <typename Reader> struct
 uses_dom_parser<Reader&>
     : uses_dom_parser<Reader> {};
 
 
-template <typename Reader, typename Unused> struct 
+template <typename Reader, typename Unused> struct
 uses_marshaled_bonded
     : uses_static_parser<Reader> {};
 
 
+template <typename... T>
+struct Protocols
+{
+private:
+    template <typename Buffer>
+    struct FilterBufferHelper;
+
+public:
+    using type = detail::mpl::list<T...>;
+
+    template <typename... U>
+    using Append = typename Protocols<detail::mpl::append_t<type, U...> >::type;
+
+    using FilterEnabled = typename Protocols<detail::mpl::filter_t<type, is_protocol_enabled> >::type;
+
+    template <typename Buffer>
+    using FilterBuffer = typename FilterBufferHelper<Buffer>::type;
+
+private:
+    template <typename Buffer>
+    struct FilterBufferHelper
+    {
+        template <typename U>
+        using check_buffer = std::is_same<typename std::remove_reference<typename U::Buffer>::type, Buffer>;
+
+        using type = typename Protocols<detail::mpl::filter_t<typename FilterEnabled::type, check_buffer> >::type;
+    };
+};
+
+
+template <typename... T>
+struct Protocols<detail::mpl::list<T...> >
+{
+    using type = Protocols<T...>;
+};
+
+
+// Deriving from Protocols<> instead of using an alias to avoid
+// binary size increase due to much longer type/function names on VC.
+struct BuiltInProtocols
+    : Protocols<
+        CompactBinaryReader<InputBuffer>,
+        SimpleBinaryReader<InputBuffer>,
+        FastBinaryReader<InputBuffer>,
+        SimpleJsonReader<InputBuffer> > {};
+
+
 struct ValueReader
 {
-    // Constructors that explicitly declared throw() are needed for 
-    // boost::variant to use optimized code path. 
-    ValueReader() throw()
+    BOOST_STATIC_CONSTEXPR uint16_t magic = 0x5256 /*VR*/;
+    using Buffer = void;
+
+    ValueReader() BOND_NOEXCEPT
         : pointer(NULL)
     {}
 
     template <typename U>
-    ValueReader(boost::reference_wrapper<U> value) throw()
+    ValueReader(boost::reference_wrapper<U> value) BOND_NOEXCEPT
         : pointer(&static_cast<const U&>(value))
     {}
 
@@ -131,12 +166,12 @@ struct ValueReader
     {}
 
     template <typename U>
-    ValueReader(boost::shared_ptr<U> value) throw()
+    ValueReader(boost::shared_ptr<U> value) BOND_NOEXCEPT
         : instance(boost::static_pointer_cast<const void>(value)),
           pointer(instance.get())
     {}
-    
-    ValueReader(const ValueReader& value) throw()
+
+    ValueReader(const ValueReader& value) BOND_NOEXCEPT
         : instance(value.instance),
           pointer(value.pointer)
     {}
@@ -152,66 +187,83 @@ struct ValueReader
 };
 
 
-using boost::mpl::_;
+BOND_DEFINE_BUFFER_MAGIC(ValueReader::Buffer, 0);
 
-template <typename Buffer>
-struct Protocols
+
+namespace detail
 {
-    typedef typename boost::mpl::list<
-       CompactBinaryReader<Buffer>,
-       SimpleBinaryReader<Buffer>,
-       FastBinaryReader<Buffer>,
-       SimpleJsonReader<Buffer>
-    >::type built_in;
+#if !defined(_MSC_VER) || _MSC_VER >= 1900
 
-    typedef typename customize<protocols>::modify<built_in>::type all;
-    
-    typedef typename boost::mpl::copy_if<
-        all, 
-        is_protocol_enabled<_>, 
-        boost::mpl::front_inserter<boost::mpl::list<> > >::type type;
+    // Avoid std::max due to a bug in Visual C++ 2017.
+    template <std::size_t V0, std::size_t V1>
+    struct max_of
+        : std::integral_constant<std::size_t, (V0 < V1 ? V1 : V0)> {};
 
-    typedef typename boost::mpl::begin<type>::type begin;
-};
+    template <typename List> struct
+    max_size;
+
+    template <> struct
+    max_size<detail::mpl::list<> >
+        : std::integral_constant<std::size_t, 0> {};
+
+    template <typename T, typename... U> struct
+    max_size<detail::mpl::list<T, U...> >
+        : max_of<sizeof(T), max_size<detail::mpl::list<U...> >::value> {};
+
+    using protocol_max_size = max_size<BuiltInProtocols::Append<ValueReader>::type>;
+
+#else // !defined(_MSC_VER) || _MSC_VER >= 1900
+
+    // Use hard-coded 128 byte storage on VC12 as a compiler crash workaround.
+    using protocol_max_size = std::integral_constant<std::size_t, 128>;
+
+#endif
+} // namespace detail
 
 
-template <typename Buffer>
-struct ProtocolReader
+class ProtocolReader
 {
-    typedef void Parser;
+public:
+    using Parser = void;
+    using Writer = void;
 
-    ProtocolReader()
-        : value()
-    {
-        // Validate that all compilation units in a program use the same set of protocols.
-        (void)one_definition<Protocols<Buffer>, typename Protocols<Buffer>::all>::value;
-    }
-    
-    ProtocolReader(const ValueReader& x)
-        : value(x)
+    ProtocolReader(const ValueReader& reader = {})
+        : _value(reader)
     {}
-    
-    template <typename Reader>
+
+    template <typename Reader, typename boost::enable_if<is_reader<Reader> >::type* = nullptr>
     ProtocolReader(const Reader& reader)
-        : value(reader)
-    {}
-    
-    ProtocolReader(const ProtocolReader& that)
-        : value(that.value)
+        : _value(reader)
     {}
 
-    bool operator==(const ProtocolReader& rhs) const 
+    bool operator==(const ProtocolReader& rhs) const
     {
-        return value == rhs.value;
+        return _value == rhs._value;
     }
-    
-    typename boost::make_variant_over<
-        typename boost::mpl::push_front<
-            typename Protocols<Buffer>::all, 
-            ValueReader
-        >::type
-    >::type value;
+
+#if !defined(BOND_NO_CXX14_RETURN_TYPE_DEDUCTION) && !defined(BOND_NO_CXX14_GENERIC_LAMBDAS)
+    template <typename Protocols, typename Visitor>
+    auto Visit(Visitor&& visitor)
+#else
+    template <typename Protocols, typename Result, typename Visitor>
+    typename detail::visitor_result<Result>::type Visit(Visitor&& visitor)
+#endif
+    {
+        return detail::visit_any<typename Protocols::template Append<ValueReader>::type
+#if defined(BOND_NO_CXX14_RETURN_TYPE_DEDUCTION) || defined(BOND_NO_CXX14_GENERIC_LAMBDAS)
+            , Result
+#endif
+            >(std::forward<Visitor>(visitor), _value);
+    }
+
+private:
+    template <typename Reader> struct
+    reader_id
+        : std::integral_constant<uint32_t, Reader::magic | (buffer_magic<typename Reader::Buffer>::value << 16)> {};
+
+
+    detail::any<reader_id, detail::protocol_max_size::value> _value;
 };
 
 
-};
+} // namespace bond

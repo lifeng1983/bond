@@ -3,46 +3,55 @@
 
 #pragma once
 
+#include <bond/core/config.h>
+
 #include "simple_json_reader.h"
 
 namespace bond
 {
 
 template <typename BufferT>
-inline const typename SimpleJsonReader<BufferT>::Field* 
+inline const typename SimpleJsonReader<BufferT>::Field*
 SimpleJsonReader<BufferT>::FindField(uint16_t id, const Metadata& metadata, BondDataType type, bool is_enum)
 {
     rapidjson::Value::ConstMemberIterator it = MemberBegin();
 
     if (it != MemberEnd())
     {
-        char ids[6];
         const char* name = detail::FieldName(metadata).c_str();
         detail::JsonTypeMatching jsonType(type, type, is_enum);
 
-#ifdef _MSC_VER
-        _itoa(id, ids, 10);
-#else        
-        sprintf(ids, "%u", id);
-#endif       
-
         // Match member by type of value and either metadata name, or string reprentation of id
         for (rapidjson::Value::ConstMemberIterator end = MemberEnd(); it != end; ++it)
+        {
             if (jsonType.TypeMatch(it->value))
-                if (!strcmp(it->name.GetString(), name) || !strcmp(it->name.GetString(), ids))
+            {
+                if (strcmp(it->name.GetString(), name) == 0)
+                {
+                    // metadata name match
                     return &it->value;
+                }
+
+                uint16_t parsedId;
+                if (detail::try_lexical_convert(it->name.GetString(), parsedId) && id == parsedId)
+                {
+                    // string id match
+                    return &it->value;
+                }
+            }
+        }
     }
 
     return NULL;
 }
 
 // deserialize std::vector<bool>
-template <typename A, typename T, typename Buffer>
+template <typename Protocols, typename A, typename T, typename Buffer>
 inline void DeserializeContainer(std::vector<bool, A>& var, const T& /*element*/, SimpleJsonReader<Buffer>& reader)
 {
     rapidjson::Value::ConstValueIterator it = reader.ArrayBegin();
     resize_list(var, reader.ArraySize());
-    
+
     for (enumerator<std::vector<bool, A> > items(var); items.more(); ++it)
     {
         items.next() = it->IsTrue();
@@ -51,12 +60,12 @@ inline void DeserializeContainer(std::vector<bool, A>& var, const T& /*element*/
 
 
 // deserialize blob
-template <typename T, typename Buffer>
+template <typename Protocols, typename T, typename Buffer>
 inline void DeserializeContainer(blob& var, const T& /*element*/, SimpleJsonReader<Buffer>& reader)
 {
     if (uint32_t size = reader.ArraySize())
     {
-        boost::shared_ptr<char[]> buffer = boost::make_shared<char[]>(size);
+        boost::shared_ptr<char[]> buffer = boost::make_shared_noinit<char[]>(size);
         uint32_t i = 0;
 
         for (rapidjson::Value::ConstValueIterator it = reader.ArrayBegin(), end = reader.ArrayEnd(); it != end && i < size; ++it)
@@ -71,13 +80,13 @@ inline void DeserializeContainer(blob& var, const T& /*element*/, SimpleJsonRead
 
 
 // deserialize list
-template <typename X, typename T, typename Buffer>
+template <typename Protocols, typename X, typename T, typename Buffer>
 inline typename boost::enable_if<is_list_container<X> >::type
 DeserializeContainer(X& var, const T& element, SimpleJsonReader<Buffer>& reader)
 {
-    detail::JsonTypeMatching type(get_type_id<typename element_type<X>::type>::value, 
+    detail::JsonTypeMatching type(get_type_id<typename element_type<X>::type>::value,
                                   GetTypeId(element),
-                                  is_enum<typename element_type<X>::type>::value);
+                                  std::is_enum<typename element_type<X>::type>::value);
 
     rapidjson::Value::ConstValueIterator it = reader.ArrayBegin();
     resize_list(var, reader.ArraySize());
@@ -87,12 +96,12 @@ DeserializeContainer(X& var, const T& element, SimpleJsonReader<Buffer>& reader)
         if (type.ComplexTypeMatch(*it))
         {
             SimpleJsonReader<Buffer> input(reader, *it);
-            DeserializeElement(var, items.next(), detail::MakeValue(input, element));
+            DeserializeElement<Protocols>(var, items.next(), detail::MakeValue(input, element));
         }
         else if (type.BasicTypeMatch(*it))
         {
             SimpleJsonReader<Buffer> input(reader, *it);
-            DeserializeElement(var, items.next(), value<typename element_type<X>::type, SimpleJsonReader<Buffer>&>(input));
+            DeserializeElement<Protocols>(var, items.next(), value<typename element_type<X>::type, SimpleJsonReader<Buffer>&>(input));
         }
         else
         {
@@ -103,13 +112,13 @@ DeserializeContainer(X& var, const T& element, SimpleJsonReader<Buffer>& reader)
 
 
 // deserialize set
-template <typename X, typename T, typename Buffer>
+template <typename Protocols, typename X, typename T, typename Buffer>
 inline typename boost::enable_if<is_set_container<X> >::type
 DeserializeContainer(X& var, const T& element, SimpleJsonReader<Buffer>& reader)
 {
-    detail::JsonTypeMatching type(get_type_id<typename element_type<X>::type>::value, 
+    detail::JsonTypeMatching type(get_type_id<typename element_type<X>::type>::value,
                                   GetTypeId(element),
-                                  is_enum<typename element_type<X>::type>::value);
+                                  std::is_enum<typename element_type<X>::type>::value);
     clear_set(var);
 
     typename element_type<X>::type e(make_element(var));
@@ -126,19 +135,19 @@ DeserializeContainer(X& var, const T& element, SimpleJsonReader<Buffer>& reader)
 
 
 // deserialize map
-template <typename X, typename T, typename Buffer>
+template <typename Protocols, typename X, typename T, typename Buffer>
 inline typename boost::enable_if<is_map_container<X> >::type
 DeserializeMap(X& var, BondDataType keyType, const T& element, SimpleJsonReader<Buffer>& reader)
 {
     detail::JsonTypeMatching key_type(
-        get_type_id<typename element_type<X>::type::first_type>::value, 
+        get_type_id<typename element_type<X>::type::first_type>::value,
         keyType,
-        is_enum<typename element_type<X>::type::first_type>::value);
+        std::is_enum<typename element_type<X>::type::first_type>::value);
 
     detail::JsonTypeMatching value_type(
-        get_type_id<typename element_type<X>::type::second_type>::value, 
+        get_type_id<typename element_type<X>::type::second_type>::value,
         GetTypeId(element),
-        is_enum<typename element_type<X>::type::second_type>::value);
+        std::is_enum<typename element_type<X>::type::second_type>::value);
 
     clear_map(var);
 
@@ -150,11 +159,22 @@ DeserializeMap(X& var, BondDataType keyType, const T& element, SimpleJsonReader<
         {
             detail::Read(*it, key);
         }
+        else
+        {
+            bond::InvalidKeyTypeException();
+        }
 
-        SimpleJsonReader<Buffer> input(reader, *++it);
+        ++it;
+
+        if (it == end)
+        {
+            bond::ElementNotFoundException(key);
+        }
+
+        SimpleJsonReader<Buffer> input(reader, *it);
 
         if (value_type.ComplexTypeMatch(*it))
-            detail::MakeValue(input, element).Deserialize(mapped_at(var, key));
+            detail::MakeValue(input, element).template Deserialize<Protocols>(mapped_at(var, key));
         else
             value<typename element_type<X>::type::second_type, SimpleJsonReader<Buffer>&>(input).Deserialize(mapped_at(var, key));
     }

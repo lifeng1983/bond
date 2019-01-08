@@ -20,12 +20,17 @@ namespace Bond.Protocols
         public SimpleJsonReader(TextReader reader)
         {
             this.reader = new JsonTextReader(reader);
+            this.reader.DateParseHandling = DateParseHandling.None;
+            this.reader.FloatParseHandling = FloatParseHandling.Double;
+
             eof = false;
         }
 
         public SimpleJsonReader(Stream stream)
         {
             reader = new JsonTextReader(new StreamReader(stream));
+            reader.DateParseHandling = DateParseHandling.None;
+            reader.FloatParseHandling = FloatParseHandling.Double;
             eof = false;
         }
 
@@ -63,10 +68,8 @@ namespace Bond.Protocols
         {
             get { return reader.LinePosition; }
         }
-        
-#if NET45
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-#endif
         public void Read()
         {
             eof = !reader.Read();

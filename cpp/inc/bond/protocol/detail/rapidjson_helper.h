@@ -3,23 +3,51 @@
 
 #pragma once
 
+#include <bond/core/config.h>
+
+#include "rapidjson_utils.h"
+
+#include <bond/core/bond_const_enum.h>
+#include <bond/core/bond_types.h>
+#include <bond/core/detail/sdl.h>
+#include <bond/core/exception.h>
+
 #define RAPIDJSON_NO_INT64DEFINE
 #define RAPIDJSON_ASSERT BOOST_ASSERT
 #define RAPIDJSON_PARSE_ERROR(err, offset) bond::RapidJsonException(rapidjson::GetParseError_En(err), offset)
 
-// disable warnings in rapidjson
-#pragma warning(push)
-#pragma warning(disable:4100 4201 4127 4701 4512)
-
-#include <bond/core/bond_const_enum.h>
-#include <bond/core/exception.h>
-#include <boost/call_traits.hpp>
-#include <boost/noncopyable.hpp>
-#include <boost/locale.hpp>
 #include "rapidjson/rapidjson.h"
 #include "rapidjson/error/en.h"
+
+// rapidjson/document.h v1.1 uses std::min/max in ways that conflict
+// with macros defined in windows. This works around the issue.
+#ifdef _MSC_VER
+#if defined(_WINDEF_) || defined(_MINWINDEF_)
+#ifndef NOMINMAX
+  #pragma push_macro("min")
+  #pragma push_macro("max")
+#undef min
+#undef max
+#endif
+#endif
+#endif
+
 #include "rapidjson/document.h"
+
+#ifdef _MSC_VER
+#if defined(_WINDEF_) || defined(_MINWINDEF_)
+#ifndef NOMINMAX
+  #pragma pop_macro("min")
+  #pragma pop_macro("max")
+#endif
+#endif
+#endif
+
 #include "rapidjson/writer.h"
+
+#include <boost/noncopyable.hpp>
+
+#include <algorithm>
 
 namespace bond
 {
@@ -31,68 +59,87 @@ namespace detail
 template <typename Buffer>
 class RapidJsonInputStream
 {
-public:    
+public:
     typedef char Ch;
 
-    RapidJsonInputStream(typename boost::call_traits<Buffer>::reference input)
-        : input(&input),
-          count(0)
+    explicit RapidJsonInputStream(const Buffer& input)
+        : _input(input),
+          _current(0),
+          _count(0)
     {
-        input.Read(current);
+        _input.Read(_current);
     }
 
-    RapidJsonInputStream(const RapidJsonInputStream& that, typename boost::call_traits<Buffer>::reference input)
-        : input(&input),
-          current(that.current),
-          count(that.count)    
-    {}
+    #if defined(_MSC_VER) && _MSC_VER < 1900
+    // since we explicitly implement a move ctor, we need to explicitly
+    // default these
+    RapidJsonInputStream(const RapidJsonInputStream&) = default;
+    RapidJsonInputStream& operator=(const RapidJsonInputStream&) = default;
 
-	char Peek()
+    // MSVC cannot = default rvalue ctor or move-assign operators
+    RapidJsonInputStream(RapidJsonInputStream&& other)
+        : _input(std::move(other._input)),
+          _current(std::move(other._current)),
+          _count(std::move(other._count))
+    { }
+
+    RapidJsonInputStream& operator=(RapidJsonInputStream&& other)
     {
-        return current;
+        _input = std::move(other._input);
+        _current = std::move(other._current);
+        _count = std::move(other._count);
+        return *this;
+    }
+    #endif
+
+    const Buffer& GetBuffer() const
+    {
+        return _input;
     }
 
-	size_t Tell() const 
+    Buffer& GetBuffer()
     {
-        return count; 
+        return _input;
     }
 
-	char Take()
+    char Peek()
     {
-        char c = current; 
-            
-        if (!input->IsEof())
+        if (!_current)
         {
-            input->Read(current);
-            ++count;
+            _input.Read(_current);
         }
-        else
+
+        return _current;
+    }
+
+    size_t Tell() const
+    {
+        return _count;
+    }
+
+    char Take()
+    {
+        char c = _current;
+        _current = '\0';
+
+        if (!c)
         {
-            current = '\x0';
+            _input.Read(c);
         }
-                
-        return c; 
+
+        ++_count;
+        return c;
     }
 
     // not implemented for read only stream
     char* PutBegin() { BOOST_ASSERT(false); return 0; }
-	void Put(char c) { BOOST_ASSERT(false); }
-	size_t PutEnd(char* begin) { BOOST_ASSERT(false); return 0; }
-
-    RapidJsonInputStream& operator=(const RapidJsonInputStream& that)
-    {
-        // rapidjson reader makes a local copy of stream within some functions 
-        // and assigns it back to its main stream variable before function exit. 
-        BOOST_ASSERT(input == that.input);
-        current = that.current;
-        count = that.count;
-        return *this;
-    }
+    void Put(char) { BOOST_ASSERT(false); }
+    size_t PutEnd(char*) { BOOST_ASSERT(false); return 0; }
 
 private:
-	Buffer* input;
-	uint8_t current;
-	size_t count;
+    Buffer _input;
+    uint8_t _current;
+    size_t _count;
 };
 
 
@@ -100,42 +147,40 @@ private:
 template <typename Buffer>
 class RapidJsonOutputStream
 {
-public:    
-    RapidJsonOutputStream(typename boost::call_traits<Buffer>::reference output)
-        : output(output)
+public:
+    explicit RapidJsonOutputStream(Buffer& output)
+        : _output(output)
     {
     }
+
+    typedef char Ch;
 
     // not implemented for write-only stream
     char Peek() { BOOST_ASSERT(false); return 0; }
     size_t Tell() const { BOOST_ASSERT(false); return 0; }
     char Take() { BOOST_ASSERT(false); return 0; }
+    size_t PutEnd(char* begin) { BOOST_ASSERT(false); return 0; }
+    char* PutBegin() { BOOST_ASSERT(false); return 0; }
 
-    char* PutBegin() 
-    { 
-        return 0; 
+    void Put(char c)
+    {
+        _output.Write(c);
     }
 
-	void Put(char c) 
-    { 
-        output.Write(c);
-    }
-	
-    size_t PutEnd(char* begin)
-    { 
-        BOOST_ASSERT(begin == 0);
+    void Flush()
+    {
     }
 
 private:
-	Buffer& output;
+    Buffer& _output;
 };
 
-    
+
 // Specialization to allow using string as input buffer for simple JSON reader
 template <>
 struct RapidJsonInputStream<const rapidjson::UTF8<>::Ch*> : rapidjson::StringStream
 {
-    RapidJsonInputStream(const char* buffer)
+    explicit RapidJsonInputStream(const char* buffer)
         : rapidjson::StringStream(buffer)
     {}
 
@@ -161,27 +206,27 @@ public:
           matchesBool(type == BT_BOOL)
     {}
 
-        
+
     bool TypeMatch(const rapidjson::Value& value) const
     {
         return ComplexTypeMatch(value) || BasicTypeMatch(value);
     }
-        
-    bool ComplexTypeMatch(const rapidjson::Value& value) const 
+
+    bool ComplexTypeMatch(const rapidjson::Value& value) const
     {
-        return ((value.IsObject() && matchesObject) 
-            || (value.IsArray() && matchesArray) 
+        return ((value.IsObject() && matchesObject)
+            || (value.IsArray() && matchesArray)
             || (value.IsNull() && matchesNull));
     }
-    
+
     bool BasicTypeMatch(const rapidjson::Value& value) const
-    {    
-        return ((value.IsString() && matchesString) 
+    {
+        return ((value.IsString() && matchesString)
             || (value.IsUint() && matchesUint)
-            || (value.IsInt() && matchesInt) 
-            || (value.IsUint64() && matchesUint64) 
+            || (value.IsInt() && matchesInt)
+            || (value.IsUint64() && matchesUint64)
             || (value.IsInt64() && matchesInt64)
-            || (value.IsNumber() && matchesNumber) 
+            || (value.IsNumber() && matchesNumber)
             || (value.IsBool() && matchesBool));
     }
 
@@ -198,28 +243,28 @@ private:
     const bool matchesBool;
 };
 
-    
+
 // bool
-inline void Read(const rapidjson::Value& value, bool& var) 
+inline void Read(const rapidjson::Value& value, bool& var)
 {
     var = value.GetBool();
 }
-    
+
 // enum
 template <typename T>
-typename boost::enable_if<is_enum<T> >::type
-Read(const rapidjson::Value& value, T& var) 
+typename boost::enable_if<std::is_enum<T> >::type
+Read(const rapidjson::Value& value, T& var)
 {
     if (value.IsString())
         ToEnum(var, value.GetString());
     else
         var = static_cast<T>(value.GetInt());
 }
-    
+
 // floating point
 template <typename T>
-typename boost::enable_if<is_floating_point<T> >::type
-Read(const rapidjson::Value& value, T& var) 
+typename boost::enable_if<std::is_floating_point<T> >::type
+Read(const rapidjson::Value& value, T& var)
 {
     var = static_cast<T>(value.GetDouble());
 }
@@ -227,28 +272,30 @@ Read(const rapidjson::Value& value, T& var)
 // signed integer
 template <typename T>
 typename boost::enable_if<is_signed_int<T> >::type
-Read(const rapidjson::Value& value, T& var) 
+Read(const rapidjson::Value& value, T& var)
 {
     var = static_cast<T>(value.GetInt64());
 }
 
 // unsigned integer
 template <typename T>
-typename boost::enable_if<is_unsigned<T> >::type
-Read(const rapidjson::Value& value, T& var) 
+typename boost::enable_if<std::is_unsigned<T> >::type
+Read(const rapidjson::Value& value, T& var)
 {
     var = static_cast<T>(value.GetUint64());
 }
-    
+
 // strings
 template <typename T>
 typename boost::enable_if<is_string<T> >::type
 Read(const rapidjson::Value& value, T& var)
 {
-    uint32_t length = value.GetStringLength();
-        
+    const uint32_t length = value.GetStringLength();
     resize_string(var, length);
-    memcpy(string_data(var), value.GetString(), length);
+
+    std::copy(make_checked_array_iterator(value.GetString(), length),
+              make_checked_array_iterator(value.GetString(), length, length),
+              make_checked_array_iterator(string_data(var), length));
 }
 
 
@@ -257,20 +304,24 @@ template <typename T>
 typename boost::enable_if<is_wstring<T> >::type
 Read(const rapidjson::Value& value, T& var)
 {
-    std::basic_string<uint16_t> str =
-        boost::locale::conv::utf_to_utf<uint16_t>(
-            value.GetString(), value.GetString() + value.GetStringLength(), boost::locale::conv::stop);
-    const uint32_t length = static_cast<uint32_t>(str.size());
+    const std::basic_string<uint16_t> str = utf_to_utf(
+        value.GetString(),
+        value.GetString() + value.GetStringLength());
 
-    resize_string(var, length);
-    std::copy(str.begin(), str.end(), string_data(var));
+    const size_t length = str.size();
+    resize_string(var, static_cast<uint32_t>(length));
+
+    std::copy(
+        str.begin(),
+        str.end(),
+        make_checked_array_iterator(string_data(var), length));
 }
 
 
 // type alias
 template <typename T>
 typename boost::enable_if<is_type_alias<T> >::type
-Read(const rapidjson::Value& value, T& var) 
+Read(const rapidjson::Value& value, T& var)
 {
     typename aliased_type<T>::type x;
     Read(value, x);
@@ -294,18 +345,15 @@ MakeValue(Reader& reader, const value<T, Reader&>&)
 
 inline const std::string& FieldName(const Metadata& metadata)
 {
-    std::map<std::string, std::string>::const_iterator it 
+    std::map<std::string, std::string>::const_iterator it
         = metadata.attributes.find("JsonName");
 
     if (it != metadata.attributes.end())
         return it->second;
-            
+
     return metadata.name;
 }
 
 } // namespace detail
 
 } // namespace bond
-
-#pragma warning(pop)
-

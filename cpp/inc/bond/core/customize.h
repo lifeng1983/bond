@@ -3,29 +3,17 @@
 
 #pragma once
 
+#include <bond/core/config.h>
+
 #include "traits.h"
 
 namespace bond
 {
 
 
-template <typename T> struct 
-is_protocol_enabled 
-    : false_type {};
-
-
-struct protocols;
-
-// User can modify set of protocols by specializing customize<protocols>
-template <typename> struct
-customize
-{
-    template <typename T> struct
-    modify
-    {
-        typedef T type;
-    };
-};
+template <typename T> struct
+is_protocol_enabled
+    : std::false_type {};
 
 
 }

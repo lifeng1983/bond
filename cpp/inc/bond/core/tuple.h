@@ -3,9 +3,12 @@
 
 #pragma once
 
-#include <tuple>
+#include <bond/core/config.h>
+
 #include "bond.h"
 #include "detail/tuple_fields.h"
+
+#include <tuple>
 
 namespace bond
 {
@@ -30,7 +33,7 @@ struct schema<std::tuple<T...>>
 
         static Metadata GetMetadata()
         {
-            Metadata metadata = reflection::MetadataInit(
+            Metadata m = reflection::MetadataInit(
                 "tuple", "bond.tuple", reflection::Attributes());
 
             std::string params;
@@ -38,32 +41,32 @@ struct schema<std::tuple<T...>>
             boost::mpl::for_each<typename detail::param_list<T...>::type>(
                 detail::TypeListBuilder(params));
 
-            metadata.name += "<" + params + ">";
-            metadata.qualified_name += "<" + params + ">";
+            m.name += "<" + params + ">";
+            m.qualified_name += "<" + params + ">";
 
-            return metadata;
+            return m;
         }
     };
 };
 
 
-template <typename ...T>
+template <typename... T>
 const Metadata schema<std::tuple<T...>>::type::metadata
     = schema<std::tuple<T...>>::type::GetMetadata();
 
 
-template <typename Writer, typename ...T>
-inline void Pack(Writer& writer, T&&...args)
+template <typename Protocols = BuiltInProtocols, typename Writer, typename... T>
+inline void Pack(Writer& writer, T&&... args)
 {
-    Serialize(std::forward_as_tuple(args...), writer);
+    Serialize<Protocols>(std::forward_as_tuple(args...), writer);
 }
 
 
-template <typename Reader, typename ...T>
-inline void Unpack(Reader reader, T&...arg)
+template <typename Protocols = BuiltInProtocols, typename Reader, typename... T>
+inline void Unpack(Reader reader, T&... arg)
 {
     auto pack = std::tie(arg...);
-    Deserialize(reader, pack);
+    Deserialize<Protocols>(reader, pack);
 }
 
 } // namepsace bond

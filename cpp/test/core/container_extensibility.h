@@ -12,7 +12,6 @@ struct SimpleList
         : size(0)
     {}
     
-#ifndef BOND_NO_CXX11_RVALUE_REFERENCES
     SimpleList(SimpleList&& other)
         : size(std::move(other.size))
     {
@@ -22,12 +21,9 @@ struct SimpleList
             items[i] = std::move(other.items[i]);
         }
     }
-#endif
 
-#ifndef BOOST_NO_CXX11_DEFAULTED_FUNCTIONS
     SimpleList(const SimpleList&) = default;
     SimpleList& operator=(const SimpleList&) = default;
-#endif
 
     bool operator==(const SimpleList& rhs) const 
     {
@@ -52,9 +48,7 @@ namespace bond
     // SimpleList is a list container
     template <typename T>
     struct is_list_container<SimpleList<T> >
-    {
-        static const bool value = true;
-    };
+        : std::true_type {};
 
 
     // element_type trait
@@ -141,27 +135,19 @@ namespace bond
 {
     template <size_t N>
     struct is_string<std::array<char, N> >
-    {
-        static const bool value = true;
-    };
+        : std::true_type {};
 
     template <size_t N>
     struct is_string<const std::array<char, N> >
-    {
-        static const bool value = true;
-    };
+        : std::true_type {};
 
     template <size_t N>
     struct is_wstring<std::array<wchar_t, N> >
-    {
-        static const bool value = true;
-    };
+        : std::true_type {};
 
     template <size_t N>
     struct is_wstring<const std::array<wchar_t, N> >
-    {
-        static const bool value = true;
-    };
+        : std::true_type {};
 
     template <typename T, size_t N>
     struct element_type<std::array<T, N> >
@@ -169,6 +155,7 @@ namespace bond
         typedef T type;
     };
 }
+
 
 namespace std
 {
@@ -199,6 +186,7 @@ namespace std
     template<typename T, size_t N>
     void resize_string(std::array<T, N>& str, uint32_t size)
     {
+        BOOST_ASSERT(size < N);
         str[size] = T(0);
     }
 };

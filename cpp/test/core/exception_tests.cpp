@@ -259,7 +259,7 @@ TEST_CASE_BEGIN(TransformException)
     typename Writer::Buffer buffer(4096);
     
     Factory<Writer>::Call(buffer, bond::v1, boost::bind(
-        bond::Serialize<T, Writer>, InitRandom<T>(2, 2), _1));
+        bond::Serialize<bond::BuiltInProtocols, T, Writer>, InitRandom<T>(2, 2), _1));
 
     {
         for (int i = 0;; ++i)
@@ -337,3 +337,11 @@ void ExceptionTest::Initialize()
             bond::FastBinaryWriter<bond::OutputBuffer> >("Exception tests for FastBinary"); 
     );
 }
+
+
+bool init_unit_test()
+{
+    ExceptionTest::Initialize();
+    return true;
+}
+

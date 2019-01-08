@@ -2,18 +2,16 @@
 {
     using System;
     using System.IO;
-
+    using System.Text;
     using Bond;
     using Bond.Protocols;
-
-    using Microsoft.VisualStudio.TestTools.UnitTesting;
-
     using Newtonsoft.Json;
+    using NUnit.Framework;
 
-    [TestClass]
+    [TestFixture]
     public class JsonParsingTests
     {
-        [TestMethod]
+        [Test]
         public void JsonParsing_EmptyStruct()
         {
             const string json = @"{ }";
@@ -21,7 +19,7 @@
             Assert.IsNotNull(target);
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_Scalar_Field_Types_Read_Successfully()
         {
             // the purpose of this test is to ensure correct handling of scalar types (this
@@ -39,7 +37,7 @@
  ""_uint32"": 117,
  ""_uint64"": 1117,
  ""_bool"": true,
- ""_float"": 5.40,
+ ""_float"": 5,
  ""_double"": -89.14,
  ""_enum1"" : 10,
  ""dt"" : 123456
@@ -61,14 +59,14 @@
 
             // JsonReader reads the input as double.
             // casting from double to float leads to floating-point in accuracy.
-            Assert.IsTrue(Math.Abs(target._float - 5.4) < 0.000001);
+            Assert.IsTrue(Math.Abs(target._float - 5) < 0.000001);
             
             Assert.AreEqual(-89.14, target._double);
             Assert.AreEqual(EnumType1.EnumValue2, target._enum1);
             Assert.AreEqual(123456, target.dt.Ticks);
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_BasicModel()
         {
             const string json = @"
@@ -87,7 +85,7 @@
             Assert.AreEqual(17, target._int32);
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_InvalidScalar()
         {
             const string json = @"
@@ -106,7 +104,7 @@
             }
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_BasicModelWithUnknownField()
         {
             const string json = @"
@@ -124,7 +122,7 @@
             Assert.AreEqual(13.2, target._double);
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_BasicModelWithUnknownNestedField()
         {
             const string json = @"
@@ -142,7 +140,7 @@
             Assert.AreEqual(13.2, target._double);
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_BasicModelWithUnknownListField()
         {
             const string json = @"
@@ -160,7 +158,7 @@
             Assert.AreEqual(13.2, target._double);
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_BasicModelWithUnknownNullElement()
         {
             const string json = @"
@@ -178,7 +176,7 @@
             Assert.AreEqual(13.2, target._double);
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_MultilineString()
         {
             const string json = @"
@@ -188,10 +186,11 @@ World""
 
             var target = ParseJson<BasicTypes>(json);
 
-            Assert.AreEqual("Hello\r\nWorld", target._str);
+            Assert.AreEqual(@"Hello
+World", target._str);
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_WhitespaceString()
         {
             const string json = @"
@@ -202,7 +201,7 @@ World""
             Assert.AreEqual(" ", target._str);
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_EmptyStringField()
         {
             const string json = @"
@@ -216,12 +215,12 @@ World""
 
             var target = ParseJson<BasicTypes>(json);
 
-            Assert.AreEqual(string.Empty, target._str);
+            Assert.IsEmpty(target._str);
             Assert.IsTrue(target._bool);
             Assert.AreEqual(13.2, target._double);
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_Fail_On_Null_Field()
         {
             const string json = @"{""_bool"":null}";
@@ -231,12 +230,12 @@ World""
                 ParseJson<BasicTypes>(json);
                 Assert.Fail("Deserialize did not throw an exception even though _bool field was null.");
             }
-            catch (NullReferenceException)
+            catch (InvalidDataException)
             {
             }
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_Nested()
         {
             const string json = @"
@@ -265,7 +264,7 @@ World""
             Assert.AreEqual(-101, target.nested.basic2._int16);
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_NullNested()
         {
             const string json = @"
@@ -278,7 +277,7 @@ World""
             Assert.IsNull(target.root);
         }
         
-        [TestMethod]
+        [Test]
         public void JsonParsing_RequiredFieldEmptyRoot()
         {
             const string json = "{}";
@@ -294,7 +293,7 @@ World""
             }
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_MissingRequiredScalarField()
         {
             const string json = @"{ ""y"" : {} }";
@@ -310,7 +309,7 @@ World""
             }
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_MissingRequiredStructField()
         {
             const string json = @"{ ""RequiredX"" : 5 }";
@@ -326,7 +325,7 @@ World""
             }
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_MissingRequiredInBase()
         {
             const string json = @"{ ""bar"" : ""a"", ""foo"": 7, ""bla"" : 4.3, ""flag"": true, ""y"": {} }";
@@ -342,7 +341,7 @@ World""
             }
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_MissingRequiredInDerived()
         {
             const string json = @"{ ""bar"" : ""a"", ""x"": 8, ""bla"" : 4.3, ""flag"": true, ""y"": {} }";
@@ -358,7 +357,7 @@ World""
             }
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_Containers()
         {
             const string json = @"
@@ -386,7 +385,7 @@ World""
             Assert.AreEqual("five", target.numbers[5]);
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_EmptyContainers()
         {
             const string json = @"
@@ -407,7 +406,7 @@ World""
             Assert.AreEqual("third", target.basics[2]._str);
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_NestedContainers()
         {
             const string json = @"
@@ -432,7 +431,7 @@ World""
             Assert.AreEqual((uint)9, target.vvb[2][0]);
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_EmptyNestedContainers()
         {
             const string json = @"
@@ -458,7 +457,7 @@ World""
             Assert.AreEqual((uint)9, target.vvb[2][0]);
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_EmptyStructsInContainer()
         {
             const string json = @"
@@ -475,7 +474,7 @@ World""
             Assert.AreEqual("Hello", target.strings[0]);
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_Recursive()
         {
             const string json = @"
@@ -508,7 +507,7 @@ World""
             Assert.AreEqual(null, target.root.right);
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_Recursive_Unwrapped_Nullable()
         {
             const string json = @"
@@ -528,7 +527,7 @@ World""
             }
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_Read_Null_From_Null_Token()
         {
             const string json = @"{ ""basic"": null, ""nested"": null}";
@@ -537,7 +536,7 @@ World""
             Assert.IsNull(target.nested);
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_Read_Null_From_Empty_List()
         {
             const string json = @"{ ""basic"": [], ""nested"": []}";
@@ -546,7 +545,7 @@ World""
             Assert.IsNull(target.nested);
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_Read_Null_Nullable_List_From_Null()
         {
             const string json = @"{ ""_bool"": null }";
@@ -554,7 +553,7 @@ World""
             Assert.IsNull(target._bool);
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_Read_Null_Nullable_List_From_Array()
         {
             const string json = @"{ ""_bool"": [] }";
@@ -562,7 +561,7 @@ World""
             Assert.IsNull(target._bool);
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_Read_Empty_Nullable_List_From_Array()
         {
             const string json = @"{ ""_bool"": [[]] }";
@@ -571,7 +570,7 @@ World""
             Assert.AreEqual(0, target._bool.Count);
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_Read_NonEmpty_Nullable_List_From_Array()
         {
             const string json = @"{ ""_int32"": [[4, 5]] }";
@@ -582,7 +581,7 @@ World""
             Assert.AreEqual(5, target._int32[1]);
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_Cannot_Read_NonEmpty_Nullable_List_From_Array_Unwrapped()
         {
             const string json = @"{ ""_int32"": [4, 5] }";
@@ -598,7 +597,7 @@ World""
             }
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_Read_NonNull_Nullable_From_List()
         {
             const string json = @"{ ""basic"": [ { ""_str"" : ""foo""} ] }";
@@ -607,7 +606,7 @@ World""
             Assert.AreEqual("foo", target.basic._str);
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_Read_NonNull_Nullable()
         {
             const string json = @"{ ""basic"": { ""_str"" : ""foo""} }";
@@ -624,16 +623,23 @@ World""
             }
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_Read_Null_As_Nothing()
         {
             const string json = @"{ ""_bool"": null }";
 
-            var target = ParseJson<Nothing>(json);
-            Assert.IsNull(target._bool);
+            try
+            {
+                ParseJson<Nothing>(json);
+                Assert.Fail("Deserialize did not throw an exception even though _bool field was null.");
+            }
+            catch (InvalidDataException ex)
+            {
+                Assert.IsTrue(ex.Message.Contains("expected JSON token of type Boolean"));
+            }
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_Read_Field_With_Nothing_Default()
         {
             const string json = @"{ ""_int32"": 17 }";
@@ -643,7 +649,7 @@ World""
             Assert.AreEqual(17, target._int32.Value);
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_Cannot_Read_Field_With_Nothing_Default_From_Array()
         {
             const string json = @"{ ""_int32"": [ 17 ] }";
@@ -659,7 +665,7 @@ World""
             }
         }
 
-        [TestMethod]
+        [Test]
         public void JsonParsing_Blobs()
         {
             const string json = @"
@@ -680,13 +686,35 @@ World""
             Assert.AreEqual(11, target.nb.Array[target.nb.Offset + 1]);
             
         }
+        
+        [Test]
+        public void JsonParsing_DateAsString()
+        {
+            const string json = @"{""value"":""2015-02-26T13:18:13.1521765-08:00""}";
 
-        private static T ParseJson<T>(string json) where T : new()
+            var target = ParseJson<Box<string>>(json);
+
+            Assert.AreEqual("2015-02-26T13:18:13.1521765-08:00", target.value);
+        }
+
+        static T ParseJson<T>(string json) where T : new()
         {
             var deserializer = new Deserializer<SimpleJsonReader>(typeof(T));
             var reader = new SimpleJsonReader(new StringReader(json));
             var target = deserializer.Deserialize<T>(reader);
             return target;
+        }
+
+        [Test]
+        public void JsonParsing_DateAsStringInStreamConstructor()
+        {
+            string timestamp = "2017-03-07T04:47:50.1145227Z";
+            string json = $"{{\"timestamp\":\"{timestamp}\"}}";
+
+            DateAsString target;
+            MemoryStream ms = new MemoryStream(Encoding.UTF8.GetBytes(json));
+            target = Deserialize<DateAsString>.From(new SimpleJsonReader(ms));
+            Assert.AreEqual(timestamp, target.timestamp);
         }
     }
 }

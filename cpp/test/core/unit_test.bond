@@ -4,7 +4,7 @@
 ///
 
 import "import_test1.bond"
-import "import_test2.bond"
+import "dir1/dir2/import_test2.bond"
 import "unit_test_core.bond"
 
 namespace unittest;
@@ -95,6 +95,12 @@ struct ListOfBase
     2: required_optional  vector<list<SimpleStruct>>       vl2;
     4: required_optional  vector<NestedWithBase2>          v4;
 };
+
+
+struct ListOfBondedBase
+{
+    1: list<bonded<SimpleBase>> l;
+}
 
 
 struct NestedStruct1OptionalBondedView
@@ -664,6 +670,14 @@ struct WithSimpleList<T>
     1: required_optional simple_list<T> field;
 };
 
+using ValueWrapper<T> = T;
+
+struct EnumValueWrapper
+{
+    0: Color unwrappedColor = Orange;
+    1: ValueWrapper<Color> wrapperColor = Orange;
+}
+
 struct Blobs
 {
     0: list<blob> blobs;
@@ -693,4 +707,12 @@ struct NameConflicts : SimpleBase
     13: nullable<SimpleStruct> f4;
     14: EnumType1 e1 = EnumValue5;
     15: set<EnumType1> e2;
+}
+
+struct ListVsNullable
+{
+    0: nullable<int64> nullableInt;
+    1: vector<int64> vectorInt;
+    2: list<int64> listInt;
+    3: blob blobData;
 }

@@ -9,6 +9,7 @@ namespace Bond.Expressions
     using System.Linq;
     using System.Linq.Expressions;
     using Bond.Protocols;
+    using Bond.Internal.Reflection;
 
     public abstract class SerializerGenerator<R, W> : ISerializerGenerator<R, W>
     {
@@ -61,7 +62,7 @@ namespace Bond.Expressions
                 {
                     body = Expression.Block(
                         new[] { parser.ReaderParam },
-                        Expression.Assign(parser.ReaderParam, parser.ReaderValue),
+                        Expression.Assign(parser.ReaderParam, Expression.Convert(parser.ReaderValue, parser.ReaderParam.Type)),
                         body);
                 }
             }
@@ -81,7 +82,7 @@ namespace Bond.Expressions
 
                 body = Expression.Invoke(
                     deferredSerialize,
-                    parser.ReaderValue,
+                    PrunedExpression.Convert(parser.ReaderValue, parser.ReaderParam.Type),
                     writer,
                     Expression.Constant(index));
             }
@@ -100,15 +101,21 @@ namespace Bond.Expressions
         readonly ProtocolWriter<W> writer = new ProtocolWriter<W>();
         readonly Dictionary<RuntimeSchema, Serialize> serializeDelegates = 
             new Dictionary<RuntimeSchema, Serialize>(new TypeDefComparer());
-
-        public SerializerTransform(Expression<Action<R, W, int>> deferredSerialize, RuntimeSchema schema)
+        readonly bool inlineNested;
+        static readonly bool untaggedWriter =
+            typeof (IUntaggedProtocolReader).IsAssignableFrom(typeof (W).GetAttribute<ReaderAttribute>().ReaderType);
+        static readonly bool binaryWriter = untaggedWriter
+            || typeof(ITaggedProtocolReader).IsAssignableFrom(typeof(W).GetAttribute<ReaderAttribute>().ReaderType);
+        
+        public SerializerTransform(Expression<Action<R, W, int>> deferredSerialize, RuntimeSchema schema, bool inlineNested = true)
             : base(deferredSerialize)
         {
             runtimeSchema = schema;
+            this.inlineNested = inlineNested;
         }
 
-        public SerializerTransform(Expression<Action<R, W, int>> deferredSerialize, Type type)
-            : this(deferredSerialize, Schema.GetRuntimeSchema(type))
+        public SerializerTransform(Expression<Action<R, W, int>> deferredSerialize, Type type, bool inlineNested = true)
+            : this(deferredSerialize, Schema.GetRuntimeSchema(type), inlineNested)
         {}
 
         public override IEnumerable<Expression<Action<R, W>>> Generate(IParser parser)
@@ -138,10 +145,13 @@ namespace Bond.Expressions
             {
                 serialize = serializeDelegates[schema] = p => serializeWithSchema(p, schema);
             }
-            // Tanscoding from tagged protocol with runtime schema generates enormous expression tree
+            // Transcoding from tagged protocol with runtime schema generates enormous expression tree
             // and for large schemas JIT fails to compile resulting lambda (InvalidProgramException).
             // As a workaround we don't inline nested serialize expressions in this case.
             var inline = !typeof(ITaggedProtocolReader).IsAssignableFrom(parser.ReaderParam.Type);
+
+            inline = inline && (this.inlineNested || !schema.IsStruct);
+
             return GenerateSerialize(serialize, parser, writer.Param, inline);
         }
 
@@ -194,7 +204,7 @@ namespace Bond.Expressions
             var expectedValueType = schema.HasValue ? schema.TypeDef.element.id : (BondDataType?)null;
 
             return parser.Container(expectedValueType,
-                (valueParser, elementType, next, count) =>
+                (valueParser, elementType, next, count, arraySegment) =>
                 {
                     var body = ControlExpression.While(next,
                         Expression.Block(
@@ -205,12 +215,22 @@ namespace Bond.Expressions
                             writer.WriteItemEnd()));
 
                     var blob = parser.Blob(count);
-                    if (blob != null)
+                    if ((blob != null) || (arraySegment != null))
                     {
                         body = PrunedExpression.IfThenElse(
                             Expression.Equal(elementType, Expression.Constant(BondDataType.BT_INT8)),
-                            writer.WriteBytes(blob),
+                            writer.WriteBytes(arraySegment ?? blob),
                             body);
+
+                        // For binary protocols we can write blob directly using protocols's WriteBytes
+                        // even if the container is not a blob (blob is BT_LIST of BT_INT8).
+                        if (binaryWriter)
+                        {
+                            body = PrunedExpression.IfThenElse(
+                                Expression.Equal(elementType, Expression.Constant(BondDataType.BT_UINT8)),
+                                writer.WriteBytes(arraySegment ?? blob),
+                                body);
+                        }
                     }
 
                     return Expression.Block(
@@ -254,7 +274,8 @@ namespace Bond.Expressions
         {
             if (parser.IsBonded)
             {
-                return parser.Bonded(writer.WriteBonded);
+                return parser.Bonded(value =>
+                    writer.WriteBonded(PrunedExpression.Convert(value, typeof(IBonded))));
             }
 
             var switchCases = new List<DeferredSwitchCase>
@@ -304,8 +325,10 @@ namespace Bond.Expressions
         {
             Debug.Assert(schema.HasValue);
 
-            if (parser.IsBonded)
-                return parser.Bonded(writer.WriteBonded);
+            if (parser.IsBonded || (untaggedWriter && schema.IsBonded))
+                return parser.Bonded(value =>
+                    writer.WriteBonded(PrunedExpression.Convert(value, typeof(IBonded))));
+
 
             if (schema.IsStruct)
                 return GenerateSerialize(Struct, parser, schema);
